@@ -19,9 +19,19 @@
 /* CONSTANTS                                                            */
 /************************************************************************/
 
-#define TRUE    1
-#define FALSE   0
+#define TRUE        1
+#define FALSE       0
 
+#define LED1            PG3
+#define LED2            PG2
+
+#define mcu_RXDO_in     PE0
+#define mcu_TXD0_out    PE1
+#define Function_in     PE2
+#define Uzt_out         PE3
+#define StartPWM_out    PE5
+#define Ustir_out       PE6
+#define StartZU_out     PE7
 
 /************************************************************************/
 /* LOCAL TYPES                                                          */
@@ -63,6 +73,8 @@ int     UART0_SendMessage(unsigned char *msg);
 void    UART0_StartEcho();
 void    UART0_StopEcho();
 
+void    GPIO_Init();
+
 void    Timer0_Init();
 
 void    CmdInit();
@@ -89,6 +101,28 @@ void    StopAdjustment();
 /************************************************************************/
 /* IMPLEMENTATION                                                       */
 /************************************************************************/
+
+/*
+ * Initializes IO ports
+ */
+
+void GPIO_Init()
+{
+    unsigned char tmp = 0; 
+    // Initialize Battery inputs
+    DDRA = tmp;     // PA0..PA7
+    DDRC = tmp;     // PC0..PC7
+    DDRB = tmp;     // PB0, PB4..PB7
+    DDRF = tmp;     // Analog signals port, sensors
+    
+    // Set up LEDs as outputs
+    tmp = (1 << LED1) | (1 << LED2);
+    DDRG = tmp;
+    
+    tmp = (1 << mcu_TXD0_out) | (1 << Uzt_out) | (1 << StartPWM_out) | (1 << Ustir_out) | (1 << StartZU_out);
+    DDRE = tmp;
+    
+}
 
 
 /*
