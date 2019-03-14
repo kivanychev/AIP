@@ -5,69 +5,116 @@
  * Author : KIvanychev
  */ 
 
-/************************************************************************/
-/* INCLUDES                                                             */
-/************************************************************************/
+//=======================================================================================================================
+// INCLUDES
+//=======================================================================================================================
 
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <string.h>
+#include <stdio.h>
 
 
-/************************************************************************/
-/* CONSTANTS                                                            */
-/************************************************************************/
+//=======================================================================================================================
+// CONSTANTS
+//=======================================================================================================================
 
-#define FOSC 16000000// Clock Speed
-#define UART_BR 9600
-#define MYUBRR FOSC/16/UART_BR-1
+#define FOSC                16000000            // MCU Clock Speed
+#define UART_BR             1000000             // 1 Mbit
+#define MYUBRR              FOSC/16/UART_BR-1
 
-#define TRUE        1
-#define FALSE       0
+#define TRUE                1
+#define FALSE               0
 
-#define ON          1
-#define OFF         0
+#define ON                  1
+#define OFF                 0
 
-#define LED1            PG3
-#define LED2            PG4
+#define LED1                PG3
+#define LED2                PG4
 
-#define mcu_RXDO_in     PE0
-#define mcu_TXD0_out    PE1
-#define Function_in     PE2
-#define Uzt_out         PE3
-#define StartPWM_out    PE5
-#define Ustir_out       PE6
-#define StartZU_out     PE7
+#define mcu_RXDO_in         PE0
+#define mcu_TXD0_out        PE1
+#define Function_in         PE2
+#define Uzt_out             PE3
+#define StartPWM_out        PE5
+#define Ustir_out           PE6
+#define StartZU_out         PE7
 
-#define TIMER_PERIOD    100  // us
+#define TIMER_PERIOD        100  // us
 
-#define UZT_HALF        0x7F
-#define UZT_ZERO        0x01
+#define UZT_HALF            0x7F
+#define UZT_ZERO            0x01
 
-#define LED1_FLASH_CNT  500
+#define LED1_FLASH_CNT      500
 
-/************************************************************************/
-/* LOCAL TYPES                                                          */
-/************************************************************************/
+// ADC constants
+#define CHANNEL_S8          0
+#define CHANNEL_UOSN1       1
+#define CHANNEL_UOST1       2
+#define CHANNEL_UOSN2       3
+#define CHANNEL_UOST5       4
+#define CHANNEL_UOST4       5
+#define CHANNEL_UOST3       6
+#define CHANNEL_UOST2       7
+#define MAX_ADC_CHANNNEL    CHANNEL_UOST2
+
+#define V_REF           5
+#define ADC_DIGITS      10                  // Разрядность АЦП
+#define ADC_COEFF       5 / 1200            // Коэффициент пересчета АЦП
+
+// Коэффициенты для измеряемых параметров
+#define U_OSN1_COEFF    5 / 1200
+#define U_OST1_COEFF    5 / 1200
+#define U_OSN2_COEFF    5 / 1200
+#define U_OST5_COEFF    5 / 1200
+#define U_OST4_COEFF    5 / 1200
+#define U_OST3_COEFF    5 / 1200
+#define U_OST2_COEFF    5 / 1200
+
+// Коды символов клавиатуры
+#define KEY_ESC         0x1B
+#define KEY_ENTER       0x0D
+#define KEY_BACKSPACE   0x7F
+#define KEY_SPACE       0x20
+
+
+//=======================================================================================================================
+// MACCROS
+//=======================================================================================================================
+
+#define StartConvAdc() ADCSRA |= (1<<ADSC)  
+
+//=======================================================================================================================
+// LOCAL TYPES
+//=======================================================================================================================
 
 typedef unsigned char BOOL;
 
-/* Command codes after conversion from string equivalents */
+// Command codes after conversion from string equivalents
 typedef enum {
-    CMD_START_ECHO,
-    CMD_STOP_ECHO,
-    CMD_START_CHARGER,
-    CMD_STOP_CHARGER,
-    CMD_START_PWM_CONVERTER,
-    CMD_STOP_PWM_CONVERTER,
-    CMD_SET_CURRENT,
-    CMD_START_ADJUSTMENT,
-    CMD_STOP_ADJUSTMENT,
+    CMD_START_PWM,
+    CMD_STOP_PWM,
+    CMD_START_ZU,
+    CMD_STOP_ZU,
+    CMD_VERSION,
+    CMD_GET_BOARD_ID,
+    CMD_SET_UPDATE_TIME,
+    CMD_START_BAT1,
+    CMD_START_BAT2,
+    CMD_START_BAT12,
+    CMD_GET_BAT1,
+    CMD_GET_BAT2,
+    CMD_GET_BAT12,
+    CMD_GET_UOST,
+    CMD_GET_UOSN,
+    CMD_SET_UZT,
+    CMD_USTIR_ON,
+    CMD_USTIR_OFF,
 
     CMD_LEN
 
-} TCommand;
+} TCmdId;
 
 typedef enum {
     UART_OK,
@@ -75,19 +122,89 @@ typedef enum {
 
 } TUartResult;
 
-/************************************************************************/
-/* LOCAL VARIABLES                                                      */
-/************************************************************************/
+typedef struct {
+    char *CommandName;                              // Имя команды, которое оператор вводит в терминале
+    TCmdId CmdId;                                   // ID команды для внутренних задач
 
-BOOL g_uart0_initialized = FALSE;
-BOOL g_uart0_echo_started = TRUE;
+} TCmd;
 
-char *g_cmd_string[CMD_LEN];
+
+//=======================================================================================================================
+// LOCAL VARIABLES
+//=======================================================================================================================
+
+TCmd g_Commands[] = {
+    { "start-pwm",          CMD_START_PWM},         // Запустить ШИП
+    { "stop-pwm",           CMD_STOP_PWM},          // Остановить ШИП
+    { "start-zu",           CMD_START_ZU},          // Запустить зарядное устройство (ЗУ)
+    { "stop-zu",            CMD_STOP_ZU},           // Остановить ЗУ
+    { "version",            CMD_VERSION},           // Получить версию ПО
+    { "get-board-id",       CMD_GET_BOARD_ID},      // Получить id платы
+
+    { "set-update-time",    CMD_SET_UPDATE_TIME},   // Установить время обновления параметров, время, мс
+                                                    // батареи во время работы диагностики в секундах
+
+    { "start-bat1",         CMD_START_BAT1},        // Запустить режим вывода на экран состояний
+                                                    // секций батареи 1 (останавливается <Esc>)
+
+    { "start-bat2",         CMD_START_BAT2},        // Запустить режим вывода на экран состояний
+                                                    // секций батареи 2 (останавливается <Esc>)
+
+    { "start-bat12",        CMD_START_BAT12},       // Запустить режим вывода на экран состояний
+                                                    // секций батареи 1 и батареи 2
+                                                    // (останавливается <Esc>)
+
+    { "get-bat1",           CMD_GET_BAT1},          // Получить разово на консоли состояние секций батареи 1
+    { "get-bat2",           CMD_GET_BAT2},		    // Получить разово на консоли состояние секций батареи 2
+    { "get-bat12",          CMD_GET_BAT12},         // Получить разово на консоли состояние секций батареи 1 и батареи 2
+    { "get-uost",           CMD_GET_UOST},          // Получить разово на консоли  значения напряжений Uoст1, … Uост5
+    { "get-uosn",           CMD_GET_UOSN},		    // Получить разово на консоли  значения напряжений Uoсн1, Uосн2
+    { "set-uzt",            CMD_SET_UZT},           // Установить напряжение задания на ток (0...5000мВ) напряжение мВ
+    { "ustir-on",           CMD_USTIR_ON},          // Включить режим “Юстировка”
+    { "ustir-off",          CMD_USTIR_OFF},         // Отключить режим “Юстировка”
+
+    { NULL,                 CMD_LEN}                // Маркер конца массива
+};
+
+// --------------------< Флаги для управления процессами работы >-------------------------------
+BOOL g_Uart0_echo = TRUE;
+BOOL g_Debug_measured1 = FALSE;
+BOOL g_Debug_measured2 = FALSE;
+BOOL g_Debug_measured3 = FALSE;
+
+volatile BOOL g_ExecuteCommand = FALSE;             // Флаг выставляется при нажатии Enter для
+                                                    // исполнения принятой команды в основном цикле
+
 unsigned int g_led1_flash_cnt = LED1_FLASH_CNT;
+char g_StrBuf[64];                                  // String for USART output buffer
 
-/************************************************************************/
-/* FUNCTION PROTOTYPES                                                  */
-/************************************************************************/
+// --------------------< Command buffer variables >---------------------------------------------
+char g_CmdBuffer[64];
+unsigned short g_CmdSymbolIndex = 0;
+
+char g_CmdToExecute[64];                            // Строка команды на исполнение
+
+//---------------------< Параметры, измеряемые АЦП >---------------------------------------------
+volatile unsigned int g_AdcBuf;                     // Переменная для чтения результата измерения из АЦП
+unsigned char g_CurrentChannel = 0;                 //Текущий номер канала АЦП (0, 1 ... 4)
+
+volatile volatile long  g_US8;
+volatile volatile long  g_Uosn1;
+volatile volatile long  g_Uosn2;
+volatile volatile long  g_Uost1;
+volatile volatile long  g_Uost2;
+volatile volatile long  g_Uost3;
+volatile volatile long  g_Uost4;
+volatile volatile long  g_Uost5;
+
+//---------------------< Состояния батарей >-----------------------------------------------------
+volatile BOOL g_BatState1[12];
+volatile BOOL g_BatState2[12];
+
+
+//=======================================================================================================================
+// FUNCTION PROTOTYPES
+//=======================================================================================================================
 
 void        UART0_Init();
 TUartResult UART0_SendMessage(char *msg);
@@ -104,44 +221,35 @@ void        GPIO_Init();
 void        Timer1_Init();
 void        Timer3_Init();              // PWM mode for Uzt
 
-void        CmdInit();
 int         Command_Receive(unsigned char *cmdStr, unsigned char *param1, unsigned char *param2);
 
-void        StartPWMConverter();
-void        StopPWMConverter();
-
-void        StartCharger();
-void        StopCharger();
-
-void        SetCurrent(int value);
-
-void        StartAdjustment();
-void        StopAdjustment();
+void        ADC_Init();
 
 
+//=======================================================================================================================
+// IMPLEMENTATION
+//=======================================================================================================================
 
+//---------------------------------------------------------------------------------------------
+// Описание:        Включает эхо-режим для USART0
+// Параметры:
 
-/************************************************************************/
-/* IMPLEMENTATION                                                       */
-/************************************************************************/
-
-/*
- * Turns on Echo mode for UART0
- */
 void UART0_StartEcho()
 {
 }
 
-/*
- * Turns off Echo mode for UART0
- */
+//---------------------------------------------------------------------------------------------
+// Описание:        Выключает эхо-режим для USART0
+// Параметры:
+
 void UART0_StopEcho()
 {
 }
 
-/*
- * Initializes Timer0 for system ticking
- */
+//---------------------------------------------------------------------------------------------
+// Описание:        Настраивает параметры Timer1 Для отсчета системного времени
+// Параметры:
+
 void Timer1_Init()
 {
     /********************************/
@@ -159,9 +267,10 @@ void Timer1_Init()
 
 }
 
-/*
- * Initializes Timer3 for PWM mode for Uzt
- */
+//---------------------------------------------------------------------------------------------
+// Описание:        Настраивает параметры работы Timer3
+// Параметры:
+
 void Timer3_Init()
 {
     /********************************/
@@ -179,10 +288,10 @@ void Timer3_Init()
     OCR3A = UZT_HALF;    // Set Chagre current to HALF of max
 }
 
+//---------------------------------------------------------------------------------------------
+// Описание:        Настраивает параметры выподов микроконтроллера в соответствии с назначением по схеме
+// Параметры:       
 
-/*
- * Initializes IO ports
- */
 void GPIO_Init()
 {
     unsigned char tmp = 0; 
@@ -202,9 +311,10 @@ void GPIO_Init()
 }
 
 
-/*
- * Pass ON/OFF parameter for LED1 on or off
- */
+//---------------------------------------------------------------------------------------------
+// Описание:        Устанавливает состояние VD1
+// Параметры:       state - новое состояние
+
 void Set_LED1(BOOL state)
 {
     unsigned char tmp;
@@ -220,9 +330,10 @@ void Set_LED1(BOOL state)
     PORTG = tmp;
 }
 
-/*
- * Pass ON/OFF parameter for LED2 on or off
- */
+//---------------------------------------------------------------------------------------------
+// Описание:        Устанавливает состояние VD2
+// Параметры:       state - новое состояние
+
 void Set_LED2(BOOL state)
 {
     unsigned char tmp;
@@ -238,9 +349,10 @@ void Set_LED2(BOOL state)
     PORTG = tmp;
 }
 
-/*
- * Toggles LED1 
- */
+//---------------------------------------------------------------------------------------------
+// Описание:        Изменяет состояние VD1 на противоположное
+// Параметры:
+
 void Toggle_LED1()
 {
     unsigned char tmp;
@@ -251,9 +363,10 @@ void Toggle_LED1()
     PORTG = tmp;
 }
 
-/*
- * Toggles LED2 
- */
+//---------------------------------------------------------------------------------------------
+// Описание:        Изменяет состояние VD2 на противоположное
+// Параметры:
+
 void Toggle_LED2()
 {
     unsigned char tmp;
@@ -264,29 +377,14 @@ void Toggle_LED2()
     PORTG = tmp;
 }
 
-/*
- * Initializes g_cmd_string array with the command strings
- */
-void CmdInit()
-{
-    g_cmd_string[CMD_START_ECHO] = "StartEcho";
-    g_cmd_string[CMD_STOP_ECHO] = "StopEcho";
-    g_cmd_string[CMD_START_CHARGER] = "StartCharger";
-    g_cmd_string[CMD_STOP_CHARGER] = "StopCharger";
-    g_cmd_string[CMD_START_PWM_CONVERTER] = "StartConverter";
-    g_cmd_string[CMD_STOP_PWM_CONVERTER] = "StopConverter";
-    g_cmd_string[CMD_SET_CURRENT] = "SetCurrent";
-    g_cmd_string[CMD_START_ADJUSTMENT] = "StartAdjustment";
-    g_cmd_string[CMD_STOP_ADJUSTMENT] = "StopAdjustment";
-
-}
-
-
+//---------------------------------------------------------------------------------------------
+// Описание:    
+// Параметры:   
 
 
 //---------------------------------------------------------------------------------------------
-// DESCRIPTION:     Настройка работы последовательного интерфейса USART
-// PARAMETERS:      baudrate - скорость передачи, бит/c
+// Описание:    Настройка работы последовательного интерфейса USART
+// Параметры:   baudrate - скорость передачи, бит/c
 
 void USART0_Init(unsigned int baudrate)
 {
@@ -296,7 +394,7 @@ void USART0_Init(unsigned int baudrate)
 	// USART0 Mode: Asynchronous
 	UCSR0A = 0x00;
 
-    UCSR0B = (1 << TXEN0) | (1 << RXEN0);
+    UCSR0B = (1 << TXEN0) | (1 << RXEN0) | (1 << RXCIE0);
     UCSR0C = (1 << UCSZ01) + (1 << UCSZ00); // 8 bit data frame глава 20.11.4
 
 	UBRR0H = baudrate >> 8;
@@ -318,7 +416,7 @@ inline void USART0_SendChar(unsigned char ch)
 
 //---------------------------------------------------------------------------------------------
 // Функция:     USART0_SendStr
-// Описание:    Отправляет тектовую строку по последовательному интерфейсу USART
+// Описание:    Отправляет текстовую строку по последовательному интерфейсу USART
 // Параметры:   str -- pointer to the string to be sent
 
 void USART0_SendStr(char *str)
@@ -337,23 +435,43 @@ void USART0_SendStr(char *str)
 }
 
 
+//---------------------------------------------------------------------------------------------
+// Функция      ADC_Init()
+// Описание:    Настроить параметры работы АЦП
 
+void ADC_Init()
+{
+    // Initializing ADC:
+    // Опорное напряжение подключить к Vcc
+    // Лево-ориентированный результат,
+    // включить канал AD0
+    ADMUX = (1<<REFS0);
 
+    // Turn on ADC, Single conversion mode, Enable ADC interrupts
+    // Set conversion frequency to FCPU/128
+    ADCSRA = (1<<ADEN) | (1<<ADSC) | (1<<ADIE) | (1<<ADPS2) | (1<<ADPS1) | (1<<ADPS0);
 
+}
 
+//=============================================================================================
+// PROGRAM ENTRY POINT
+//=============================================================================================
 
+//---------------------------------------------------------------------------------------------
+// Функция:     main
+// Описание:    Точка входа программы
 
-
-
-/*
- * Main logic
- */
 int main(void)
 {
+    unsigned short cmdIndex;
+
     GPIO_Init();
 
     Toggle_LED2();   
-    USART0_Init(103);
+    USART0_Init(MYUBRR);
+    
+    ADC_Init();
+    StartConvAdc();
     
     USART0_SendStr("Give me battery\r\n");
     
@@ -362,25 +480,104 @@ int main(void)
     USART0_SendStr("Echo mode ON\r\n");
     USART0_SendStr("Ready\r\n");
 
+    sei();
 
     while (1) 
     {
-        /* Wait for data to be received */
-        if ( (UCSR0A & (1<<RXC0)) )
+        if(g_ExecuteCommand == TRUE)
         {
-            unsigned char ch = UDR0;
-            USART0_SendChar(ch);
-        }            
+            USART0_SendStr("\r\n");
+            USART0_SendStr("Searching: ");
+            USART0_SendStr(g_CmdToExecute);
+            USART0_SendStr("\r\n");
+            
+            for(cmdIndex = 0; g_Commands[cmdIndex].CommandName != NULL; ++cmdIndex)
+            {
+                if(strcmp(g_CmdToExecute, g_Commands[cmdIndex].CommandName) == 0)
+                {
+                    USART0_SendStr("Command found!\r\n");
+                    switch(g_Commands[cmdIndex].CmdId)
+                    {
+                        case CMD_START_PWM:
+                            break;
+                            
+                        case CMD_STOP_PWM:
+                            break;
+                            
+                        case CMD_START_ZU:
+                            break;
+                            
+                        case CMD_STOP_ZU:
+                            break;
+                            
+                        case CMD_VERSION:
+                            break;
+                            
+                        case CMD_GET_BOARD_ID:
+                            break;
+                            
+                        case CMD_SET_UPDATE_TIME:
+                            break;
+                            
+                        case CMD_START_BAT1:
+                            break;
+                            
+                        case CMD_START_BAT2:
+                            break;
+                            
+                        case CMD_START_BAT12:
+                            break;
+                            
+                        case CMD_GET_BAT1:
+                            break;
+                            
+                        case CMD_GET_BAT2:
+                            break;
+                            
+                        case CMD_GET_BAT12:
+                            break;
+                            
+                        case CMD_GET_UOST:
+                            break;
+                            
+                        case CMD_GET_UOSN:
+                            break;
+                            
+                        case CMD_SET_UZT:
+                            break;
+                            
+                        case CMD_USTIR_ON:
+                            break;
+                            
+                        case CMD_USTIR_OFF:
+
+                        default:
+                            break;
+                    }
+
+                    break;
+                }
+            }  
+                          
+            if(g_Commands[cmdIndex].CommandName == NULL)
+            {
+                 USART0_SendStr("Not found!\r\n");
+            }
+            
+            g_ExecuteCommand = FALSE;
+        }
+        
         
     }
 }
 
+//=============================================================================================
+// INTERRUPT HANDLERS
+//=============================================================================================
 
-/************************************************************************/
-/* Timer 1 Compare match Interrupt handler                              */
-/*                                                                      */
-/*                                                                      */
-/************************************************************************/
+//---------------------------------------------------------------------------------------------
+// Функция:     Обработчик прерывания Timer1 по событию Compare A
+// Описание:    
 
 ISR(TIMER1_COMPA_vect)
 {
@@ -392,3 +589,148 @@ ISR(TIMER1_COMPA_vect)
     }
 
 }
+
+
+//---------------------------------------------------------------------------------------------
+// Функция:     Обработчик прерывания АЦП
+// Описание:
+
+ISR(ADC_vect)
+{
+    g_AdcBuf = ADCL;
+    g_AdcBuf = (ADCH << 8) | g_AdcBuf;
+
+    switch(g_CurrentChannel)
+    {
+        case CHANNEL_S8:
+            break;
+
+        case CHANNEL_UOSN1:
+            g_Uosn1 = g_AdcBuf * U_OSN1_COEFF;
+            sprintf(g_StrBuf, "Uosn1=%ld\r\n", g_Uosn1);
+            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+        break;
+
+        case CHANNEL_UOST1:
+            g_Uost1 = g_AdcBuf * U_OST1_COEFF;
+            sprintf(g_StrBuf, "Uost1=%ld\r\n", g_Uost1);
+            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            break;
+
+        case CHANNEL_UOSN2:
+            g_Uosn2 = g_AdcBuf * U_OSN2_COEFF;
+            sprintf(g_StrBuf, "Uosn2=%ld\r\n", g_Uosn2);
+            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            break;
+
+        case CHANNEL_UOST5:
+            g_Uost5 = g_AdcBuf * U_OST5_COEFF;
+            sprintf(g_StrBuf, "Uost5=%ld\r\n", g_Uost5);
+            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            break;
+            
+        case CHANNEL_UOST4:
+            g_Uost4 = g_AdcBuf * U_OST4_COEFF;
+            sprintf(g_StrBuf, "Uost4=%ld\r\n", g_Uost4);
+            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            break;
+        
+        case CHANNEL_UOST3:
+            g_Uost3 = g_AdcBuf * U_OST3_COEFF;
+            sprintf(g_StrBuf, "Uost3=%ld\r\n", g_Uost3);
+            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            break;
+        
+        case CHANNEL_UOST2:
+            g_Uost2 = g_AdcBuf * U_OST2_COEFF;
+            sprintf(g_StrBuf, "Uost2=%ld\r\n", g_Uost2);
+            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            break;
+
+        default:
+            break;
+
+    }
+
+
+    g_CurrentChannel++;
+    if(g_CurrentChannel > MAX_ADC_CHANNNEL)
+    {
+        g_CurrentChannel = 0;
+    }
+
+    // Установить следующий измеряемый канал по очереди (по кругу 0 1 2 3 4 5 0 1 2 3 4 5 0 1 ...)
+    ADMUX = ADMUX & 0b11111000;
+    ADMUX = ADMUX | g_CurrentChannel;
+    
+    // Restarting AD conversion defore exit
+    StartConvAdc();
+}
+
+//---------------------------------------------------------------------------------------------
+// Функция:     Обработчик прерывания USART RX Complete
+// Описание:    Принимает символы по USART0 от ПК или другого внешнего устройства
+
+ISR(USART0_RX_vect)
+{
+    unsigned char ch = UDR0;
+    unsigned short ind;
+
+    switch(ch)
+    {
+        case KEY_ESC:
+            if(g_Debug_measured1 == TRUE)
+            {
+                g_Debug_measured1 = FALSE;
+            }                    
+            else
+            {
+                g_Debug_measured1 = TRUE;
+            }                    
+            break;
+           
+        case KEY_ENTER:
+            if(g_CmdSymbolIndex == 0)
+            {
+                USART0_SendStr("No Command entered\r\n");
+                break;
+            }
+            
+            g_CmdBuffer[g_CmdSymbolIndex] = '\0';   // Зафиксировать окончание команды
+            
+            // Скопировать принятую команду в строку команды для исполнения
+            for(ind = 0; g_CmdBuffer[ind] != '\0'; ++ind)
+            {
+                g_CmdToExecute[ind] = g_CmdBuffer[ind];
+                
+                // Заменить разделитель команды и параметра на 0
+                if(g_CmdToExecute[ind] == KEY_SPACE)
+                {
+                    g_CmdToExecute[ind] = '\0';
+                }
+            }
+            g_CmdToExecute[ind] = '\0';
+            
+            g_CmdSymbolIndex = 0;           // Вернуться на начало строки буфера команды
+            USART0_SendStr("\r\n");         // Перевести строку на ерминале
+            g_ExecuteCommand = TRUE;        // Выставить флаг на исполнение команды
+            break;
+
+        case KEY_BACKSPACE:
+            if(g_CmdSymbolIndex > 0)
+            {
+                g_CmdSymbolIndex--;
+            }
+                            
+            UDR0 = ch;
+            break;
+                
+        default:
+            g_CmdBuffer[g_CmdSymbolIndex] = ch;
+            g_CmdSymbolIndex++;
+
+            UDR0 = ch;
+            break;
+    
+    }
+}    
