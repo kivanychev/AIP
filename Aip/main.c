@@ -33,6 +33,7 @@
 #define LED1                PG3
 #define LED2                PG4
 
+// Functional pin names
 #define mcu_RXDO_in         PE0
 #define mcu_TXD0_out        PE1
 #define Function_in         PE2
@@ -61,7 +62,6 @@
 
 #define V_REF           5
 #define ADC_DIGITS      10                  // Разрядность АЦП
-#define ADC_COEFF       5 / 1200            // Коэффициент пересчета АЦП
 
 // Коэффициенты для измеряемых параметров
 #define U_OSN1_COEFF    5 / 1200
@@ -77,6 +77,9 @@
 #define KEY_ENTER       0x0D
 #define KEY_BACKSPACE   0x7F
 #define KEY_SPACE       0x20
+
+// Состояния
+#define ST_ 0x01
 
 
 //=======================================================================================================================
@@ -115,6 +118,9 @@ typedef enum {
     CMD_LEN
 
 } TCmdId;
+
+
+// 
 
 typedef enum {
     UART_OK,
@@ -225,6 +231,8 @@ int         Command_Receive(unsigned char *cmdStr, unsigned char *param1, unsign
 
 void        ADC_Init();
 
+void        Set_StartPWM(BOOL state);
+void        Set_StartZU(BOOL state);
 
 //=======================================================================================================================
 // IMPLEMENTATION
@@ -305,7 +313,7 @@ void GPIO_Init()
     tmp = (1 << LED1) | (1 << LED2);
     DDRG = tmp;
     
-//    tmp = (1 << mcu_TXD0_out) | (1 << Uzt_out) | (1 << StartPWM_out) | (1 << Ustir_out) | (1 << StartZU_out);
+    tmp = (1 << mcu_TXD0_out) | (1 << Uzt_out) | (1 << StartPWM_out) | (1 << Ustir_out) | (1 << StartZU_out);
     DDRE = tmp;
     
 }
@@ -453,6 +461,45 @@ void ADC_Init()
 
 }
 
+
+//---------------------------------------------------------------------------------------------
+// Описание:        Устанавливает состояние выхода StartPWM_out
+// Параметры:       state - новое состояние
+
+void Set_StartPWM(BOOL state)
+{
+    unsigned char tmp;
+
+    tmp = PORTE;
+    tmp = tmp & (0xFF - (1 << StartPWM_out));   // Clear StartPWM_out state
+
+    if(state == OFF)
+    {
+        tmp = tmp | (1 << StartPWM_out);
+    }
+
+    PORTE = tmp;
+}
+
+//---------------------------------------------------------------------------------------------
+// Описание:        Устанавливает состояние выхода StartPWM_out
+// Параметры:       state - новое состояние
+
+void Set_StartZU(BOOL state)
+{
+    unsigned char tmp;
+
+    tmp = PORTE;
+    tmp = tmp & (0xFF - (1 << StartZU_out));   // Clear StartZU_out state
+
+    if(state == OFF)
+    {
+        tmp = tmp | (1 << StartZU_out);
+    }
+
+    PORTE = tmp;
+}
+
 //=============================================================================================
 // PROGRAM ENTRY POINT
 //=============================================================================================
@@ -491,6 +538,7 @@ int main(void)
             USART0_SendStr(g_CmdToExecute);
             USART0_SendStr("\r\n");
             
+            // Найти команду
             for(cmdIndex = 0; g_Commands[cmdIndex].CommandName != NULL; ++cmdIndex)
             {
                 if(strcmp(g_CmdToExecute, g_Commands[cmdIndex].CommandName) == 0)
@@ -499,17 +547,25 @@ int main(void)
                     switch(g_Commands[cmdIndex].CmdId)
                     {
                         case CMD_START_PWM:
+                            Set_StartPWM(ON);
+                            USART0_SendStr("CMD_START_PWM finished!\r\n");
                             break;
                             
                         case CMD_STOP_PWM:
+                            Set_StartPWM(OFF);
+                            USART0_SendStr("CMD_STOP_PWM finished!\r\n");
                             break;
                             
                         case CMD_START_ZU:
+                            Set_StartZU(ON);
+                            USART0_SendStr("CMD_START_ZU finished!\r\n");
                             break;
                             
                         case CMD_STOP_ZU:
+                            Set_StartZU(OFF);
+                            USART0_SendStr("CMD_STOP_ZU finished!\r\n");
                             break;
-                            
+
                         case CMD_VERSION:
                             break;
                             
@@ -547,9 +603,12 @@ int main(void)
                             break;
                             
                         case CMD_USTIR_ON:
+                            // PE6
                             break;
                             
                         case CMD_USTIR_OFF:
+                            // PE6
+                            break;
 
                         default:
                             break;
@@ -593,7 +652,7 @@ ISR(TIMER1_COMPA_vect)
 
 //---------------------------------------------------------------------------------------------
 // Функция:     Обработчик прерывания АЦП
-// Описание:
+// Описание:    Измеряет хначения всех параметров
 
 ISR(ADC_vect)
 {
@@ -669,7 +728,9 @@ ISR(ADC_vect)
 
 //---------------------------------------------------------------------------------------------
 // Функция:     Обработчик прерывания USART RX Complete
-// Описание:    Принимает символы по USART0 от ПК или другого внешнего устройства
+// Описание:    Принимает символы по USART0 от ПК или другого внешнего устройства и
+//                передает введенные строки на определение команды в основной цикл
+//                через буфер g_CmdToExecute
 
 ISR(USART0_RX_vect)
 {
@@ -678,6 +739,8 @@ ISR(USART0_RX_vect)
 
     switch(ch)
     {
+        // Включить или выключить режим вывода в консоль измеренных значений АЦП
+        // в их изначальном виде
         case KEY_ESC:
             if(g_Debug_measured1 == TRUE)
             {
@@ -689,6 +752,7 @@ ISR(USART0_RX_vect)
             }                    
             break;
            
+        // Проверить, была ли введена строка для команды
         case KEY_ENTER:
             if(g_CmdSymbolIndex == 0)
             {
