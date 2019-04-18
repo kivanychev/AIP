@@ -76,7 +76,7 @@
 #define PIN_TXD0_out        PE1
 #define PIN_Function_in     PE2
 #define PIN_Uzt_out         PE3
-#define PIN_StartPWM_out    PE5
+#define PIN_StartIt_out    PE5
 #define PIN_Ustir_out       PE6
 #define PIN_StartZU_out     PE7
 
@@ -136,7 +136,7 @@
 
 
 //=======================================================================================================================
-// MACCROS
+// MACROS
 //=======================================================================================================================
 
 #define StartConvAdc() ADCSRA |= (1<<ADSC)  
@@ -149,24 +149,20 @@ typedef unsigned char BOOL;
 
 // Command codes after conversion from string equivalents
 typedef enum {
-    CMD_START_PWM,
-    CMD_STOP_PWM,
+    CMD_START_IT,
+    CMD_STOP_IT,
     CMD_START_ZU,
     CMD_STOP_ZU,
     CMD_VERSION,
     CMD_GET_BOARD_ID,
-    CMD_SET_UPDATE_TIME,
-    CMD_START_BAT1,
-    CMD_START_BAT2,
-    CMD_START_BAT12,
     CMD_GET_BAT1,
     CMD_GET_BAT2,
-    CMD_GET_BAT12,
     CMD_GET_UOST,
     CMD_GET_UOSN,
     CMD_SET_UZT,
     CMD_USTIR_ON,
     CMD_USTIR_OFF,
+    CMD_START_DIAGN,
 
     CMD_LEN
 
@@ -192,35 +188,31 @@ typedef struct {
 // LOCAL VARIABLES
 //=======================================================================================================================
 
+char *g_Messages[] = {
+  "00 ГОТОВ",
+  "01 НЕИСПРАВНОСТЬ ИСТОЧНИКА ТОКА",
+  "02 НЕИСПРАВНОСТЬ ЗАРЯДНОГО УСТРОЙСТВА",
+  "03 НЕИСПРАВНОСТЬ АБ "
+};
+
 TCmd g_Commands[] = {
-    { "start-pwm",          CMD_START_PWM},         // Запустить ШИП
-    { "stop-pwm",           CMD_STOP_PWM},          // Остановить ШИП
+    { "start-it",           CMD_START_IT},          // Запустить Источник Тока  
+    { "stop-it",            CMD_STOP_IT},           // Остановить Источник Тока
+
     { "start-zu",           CMD_START_ZU},          // Запустить зарядное устройство (ЗУ)
     { "stop-zu",            CMD_STOP_ZU},           // Остановить ЗУ
+
     { "version",            CMD_VERSION},           // Получить версию ПО
     { "get-board-id",       CMD_GET_BOARD_ID},      // Получить id платы
 
-    { "set-update-time",    CMD_SET_UPDATE_TIME},   // Установить время обновления параметров, время, мс
-                                                    // батареи во время работы диагностики в секундах
-
-    { "start-bat1",         CMD_START_BAT1},        // Запустить режим вывода на экран состояний
-                                                    // секций батареи 1 (останавливается <Esc>)
-
-    { "start-bat2",         CMD_START_BAT2},        // Запустить режим вывода на экран состояний
-                                                    // секций батареи 2 (останавливается <Esc>)
-
-    { "start-bat12",        CMD_START_BAT12},       // Запустить режим вывода на экран состояний
-                                                    // секций батареи 1 и батареи 2
-                                                    // (останавливается <Esc>)
-
     { "get-bat1",           CMD_GET_BAT1},          // Получить разово на консоли состояние секций батареи 1
     { "get-bat2",           CMD_GET_BAT2},		    // Получить разово на консоли состояние секций батареи 2
-    { "get-bat12",          CMD_GET_BAT12},         // Получить разово на консоли состояние секций батареи 1 и батареи 2
     { "get-uost",           CMD_GET_UOST},          // Получить разово на консоли  значения напряжений Uoст1, … Uост5
     { "get-uosn",           CMD_GET_UOSN},		    // Получить разово на консоли  значения напряжений Uoсн1, Uосн2
     { "set-uzt",            CMD_SET_UZT},           // Установить напряжение задания на ток (0...5000мВ) напряжение мВ
     { "ustir-on",           CMD_USTIR_ON},          // Включить режим “Юстировка”
     { "ustir-off",          CMD_USTIR_OFF},         // Отключить режим “Юстировка”
+    { "start-diagn",        CMD_START_DIAGN},       // Запустить режим “Непрерывная диагностика”
 
     { NULL,                 CMD_LEN}                // Маркер конца массива
 };
@@ -283,8 +275,15 @@ int         Command_Receive(unsigned char *cmdStr, unsigned char *param1, unsign
 
 void        ADC_Init();
 
-void        Set_StartPWM(BOOL state);
-void        Set_StartZU(BOOL state);
+// Command related functions
+void        Set_StartIt(BOOL state);        // Called for 'start-it' and 'stop-it' commands
+void        Set_StartZU(BOOL state);        // Called for 'start-zu' and 'stop-zu' commands
+void        Set_Uzt(unsigned int value);    // Called for 'set-uzt <value>' command
+void        StartDiagnostic();              // Called for 'start-diagn' command
+void        StopDiagnostic();               // Called for <Esc> command or key press
+void        GetBat1();                      // Called for 'get-bat1; command
+void        GetBat2();                      // Called for 'get-bat2; command
+
 
 //=======================================================================================================================
 // IMPLEMENTATION
@@ -366,7 +365,7 @@ void GPIO_Init()
     tmp = (1 << LED1) | (1 << LED2);
     DDRG = tmp;
     
-    tmp = (1 << PIN_TXD0_out) | (1 << PIN_Uzt_out) | (1 << PIN_StartPWM_out) | (1 << PIN_Ustir_out) | (1 << PIN_StartZU_out);
+    tmp = (1 << PIN_TXD0_out) | (1 << PIN_Uzt_out) | (1 << PIN_StartIt_out) | (1 << PIN_Ustir_out) | (1 << PIN_StartZU_out);
     DDRE = tmp;
     
 }
@@ -441,6 +440,7 @@ void Toggle_LED2()
 /**********************************************************************************************************/
 // Описание:    
 // Параметры:   
+/**********************************************************************************************************/
 
 
 /**********************************************************************************************************/
@@ -462,9 +462,11 @@ void USART0_Init(unsigned int baudrate)
 	UBRR0L = baudrate;
 }
 
-/**********************************************************************************************************/
-// Описание:    Передает текстовый символ по последовательному интерфейсу
-// Параметры:   ch -- текстовый символ для передачи по USART
+/****************************************************************************/
+/* Функция:     USART0_SendChar                                             */
+/* Описание:    Передает текстовый символ по последовательному интерфейсу   */
+/* Параметры:   ch -- текстовый символ для передачи по USART                */
+/****************************************************************************/
 
 inline void USART0_SendChar(unsigned char ch)
 {
@@ -475,10 +477,11 @@ inline void USART0_SendChar(unsigned char ch)
 	
 }
 
-/**********************************************************************************************************/
-// Функция:     USART0_SendStr
-// Описание:    Отправляет текстовую строку по последовательному интерфейсу USART
-// Параметры:   str -- pointer to the string to be sent
+/************************************************************************************/
+/* Функция:     USART0_SendStr                                                      */
+/* Описание:    Отправляет текстовую строку по последовательному интерфейсу USART   */
+/* Параметры:   str -- pointer to the string to be sent                             */
+/************************************************************************************/
 
 void USART0_SendStr(char *str)
 {
@@ -516,27 +519,27 @@ void ADC_Init()
 
 
 /*********************************************************************/
-/* Описание:        Устанавливает состояние выхода PIN_StartPWM_out  */
+/* Описание:        Устанавливает состояние выхода PIN_StartIt_out  */
 /* Параметры:       state - новое состояние                          */
 /*********************************************************************/
 
-void Set_StartPWM(BOOL state)
+void Set_StartIt(BOOL state)
 {
     unsigned char tmp;
 
     tmp = PORTE;
-    tmp = tmp & (0xFF - (1 << PIN_StartPWM_out));   // Clear PIN_StartPWM_out state
+    tmp = tmp & (0xFF - (1 << PIN_StartIt_out));   // Clear PIN_StartIt_out state
 
     if(state == ON)
     {
-        tmp = tmp | (1 << PIN_StartPWM_out);
+        tmp = tmp | (1 << PIN_StartIt_out);
     }
 
     PORTE = tmp;
 }
 
 /*********************************************************************/
-/* Описание:        Устанавливает состояние выхода PIN_StartPWM_out  */
+/* Описание:        Устанавливает состояние выхода PIN_StartIt_out  */
 /* Параметры:       state - новое состояние                          */
 /*********************************************************************/
 
@@ -555,13 +558,95 @@ void Set_StartZU(BOOL state)
     PORTE = tmp;
 }
 /***************************************************************************/
-/* Описание:        Устанавливает состояние выхода PIN_StartPWM_out        */
-/* Параметры:       value - значение для регистра сравнения от 0 до 1023   */
+/* Описание:        Устанавливает состояние выхода PIN_StartIt_out        */
+/* Параметры:       value - значение в мВ с шагом 20 мВ (0...5000)         */
 /***************************************************************************/
 
 void Set_Uzt(unsigned int value)
 {
-    OCR3A = value;
+    OCR3A = ((value / 100) << 8) / 50;
+}
+
+
+/********************************************************/
+/* Функция:         StartDiagnostic()                   */
+/* Описание:        Called for 'start-diagn' command    */
+/* Параметры:                                           */
+/********************************************************/
+void StartDiagnostic()
+{
+    
+}
+
+/****************************************************/
+/* Функция:         StopDiagnostic()                */
+/* Описание:        Called for <Esc> command        */
+/* Параметры:                                       */
+/****************************************************/
+void StopDiagnostic()
+{
+    
+}
+
+/********************************************************/
+/* Функция:         GetBat1                             */
+/* Описание:        Called for 'get-bat1; command       */
+/* Параметры:                                           */
+/********************************************************/
+void GetBat1()
+{
+    unsigned short i;
+    unsigned int bat1 = 0;
+    
+    bat1 = PINA + (( PINC & ((1 << PIN_Bat1_09) | (1 << PIN_Bat1_10) | (1 << PIN_Bat1_11) | (1 << PIN_Bat1_12)) ) << 8);
+    
+    sprintf(g_StrBuf, "@BAT1=");
+    
+    for(i = 0; i < 12; ++i)
+    {
+        if( (bat1 & (1 << i)) == 0)
+        {
+            strcat(g_StrBuf, "0 ");
+        }
+        else
+        {
+            strcat(g_StrBuf, "1 ");
+        }
+    }
+    
+    strcat(g_StrBuf, "\r\n");
+    USART0_SendStr(g_StrBuf);
+    
+}
+
+/********************************************************/
+/* Функция:         GetBat2                             */
+/* Описание:        Called for 'get-bat2; command       */
+/* Параметры:                                           */
+/********************************************************/
+void GetBat2()
+{
+    unsigned short i;
+    unsigned int bat2 = 0;
+    bat2 = (PINC >> 4) | (PINB << 4);
+    
+    sprintf(g_StrBuf, "@BAT2=");
+    
+    for(i = 0; i < 12; ++i)
+    {
+        if( (bat2 & (1 << i)) == 0)
+        {
+            strcat(g_StrBuf, "0 ");
+        }
+        else
+        {
+            strcat(g_StrBuf, "1 ");
+        }
+    }
+    
+    strcat(g_StrBuf, "\r\n");
+    USART0_SendStr(g_StrBuf);
+    
 }
 
 //=======================================================================================================================
@@ -588,9 +673,7 @@ int main(void)
     
     USART0_SendStr("Give me battery\r\n");
     
-    USART0_SendStr("Power supply Controller ver 0.1\r\n");
-    USART0_SendStr("(c) NNTU, 2018\r\n");
-    USART0_SendStr("Echo mode ON\r\n");
+    USART0_SendStr("Power supply Controller ver 1.0\r\n");
     USART0_SendStr("Ready\r\n");
 
     sei();
@@ -612,14 +695,14 @@ int main(void)
                     USART0_SendStr("Command found!\r\n");
                     switch(g_Commands[cmdIndex].CmdId)
                     {
-                        case CMD_START_PWM:
-                            Set_StartPWM(ON);
-                            USART0_SendStr("CMD_START_PWM finished!\r\n");
+                        case CMD_START_IT:
+                            Set_StartIt(ON);
+                            USART0_SendStr("CMD_START_IT finished!\r\n");
                             break;
                             
-                        case CMD_STOP_PWM:
-                            Set_StartPWM(OFF);
-                            USART0_SendStr("CMD_STOP_PWM finished!\r\n");
+                        case CMD_STOP_IT:
+                            Set_StartIt(OFF);
+                            USART0_SendStr("CMD_STOP_IT finished!\r\n");
                             break;
                             
                         case CMD_START_ZU:
@@ -640,25 +723,12 @@ int main(void)
                             USART0_SendStr("Board ID: " BOARD_ID "\r\n");
                             break;
                             
-                        case CMD_SET_UPDATE_TIME:
-                            break;
-                            
-                        case CMD_START_BAT1:
-                            break;
-                            
-                        case CMD_START_BAT2:
-                            break;
-                            
-                        case CMD_START_BAT12:
-                            break;
-                            
                         case CMD_GET_BAT1:
+                            GetBat1();
                             break;
                             
                         case CMD_GET_BAT2:
-                            break;
-                            
-                        case CMD_GET_BAT12:
+                            GetBat2();
                             break;
                             
                         case CMD_GET_UOST:
@@ -669,6 +739,7 @@ int main(void)
                             
                         case CMD_SET_UZT:
                             USART0_SendStr("Setting Uzt to: ");
+
                             // Найти поле параметра команды
                             char *param = &(g_CmdToExecute[0]);
                             unsigned int value;
@@ -697,6 +768,11 @@ int main(void)
                             // PE6
                             break;
 
+                        case CMD_START_DIAGN:
+                            StartDiagnostic();
+                            break;
+                        
+
                         default:
                             break;
                     }
@@ -704,7 +780,7 @@ int main(void)
                     break;
                 }
             }  
-                          
+        
             if(g_Commands[cmdIndex].CommandName == NULL)
             {
                  USART0_SendStr("Not found!\r\n");
@@ -829,17 +905,9 @@ ISR(USART0_RX_vect)
 
     switch(ch)
     {
-        // Включить или выключить режим вывода в консоль измеренных значений АЦП
-        // в их изначальном виде
+        // Остановить режим диапностики
         case KEY_ESC:
-            if(g_Debug_measured1 == TRUE)
-            {
-                g_Debug_measured1 = FALSE;
-            }                    
-            else
-            {
-                g_Debug_measured1 = TRUE;
-            }                    
+            StopDiagnostic();
             break;
            
         // Проверить, была ли введена строка для команды
