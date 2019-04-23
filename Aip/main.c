@@ -76,7 +76,7 @@
 #define PIN_TXD0_out        PE1
 #define PIN_Function_in     PE2
 #define PIN_Uzt_out         PE3
-#define PIN_StartIt_out    PE5
+#define PIN_StartIt_out     PE5
 #define PIN_Ustir_out       PE6
 #define PIN_StartZU_out     PE7
 
@@ -114,16 +114,19 @@
 #define MAX_ADC_CHANNNEL    CHANNEL_UOST2
 
 #define V_REF               5
-#define ADC_DIGITS          10                  // Разрядность АЦП
+#define ADC_DIVIDER         100                             // Сотые Доли Вольта
+#define ADC_DIGITS          10                              // Разрядность АЦП
+#define ADC_COEFF           5 * ADC_DIVIDER / ((1 << ADC_DIGITS) - 1)   // Для получения значения в Сотых Долях Вольта
 
 // Коэффициенты для измеряемых параметров
-#define U_OSN1_COEFF    5 / 1200
-#define U_OST1_COEFF    5 / 1200
-#define U_OSN2_COEFF    5 / 1200
-#define U_OST5_COEFF    5 / 1200
-#define U_OST4_COEFF    5 / 1200
-#define U_OST3_COEFF    5 / 1200
-#define U_OST2_COEFF    5 / 1200
+#define U_OSN1_COEFF    20
+#define U_OST1_COEFF    20
+
+#define U_OSN2_COEFF    1
+#define U_OST5_COEFF    1
+#define U_OST4_COEFF    1
+#define U_OST3_COEFF    1
+#define U_OST2_COEFF    1
 
 // Коды символов клавиатуры
 #define KEY_ESC         0x1B
@@ -132,7 +135,8 @@
 #define KEY_SPACE       0x20
 
 // Состояния
-#define ST_ 0x01
+#define ST_NORMAL       0x01
+#define ST_FAILURE      0x02
 
 
 //=======================================================================================================================
@@ -168,6 +172,15 @@ typedef enum {
 
 } TCmdId;
 
+typedef enum {
+    MSG_READY,
+    MSG_POWER_SUPPLY_FAILURE,
+    MSG_CHARGER_FAILURE,
+    MSG_BATTERY_FAILURE,
+    MSG_COMMAND_NOT_FOUND
+    
+} TMsgId;
+
 
 // 
 
@@ -192,7 +205,8 @@ char *g_Messages[] = {
   "00 READY",
   "01 POWER SUPPLY FAILURE!",
   "02 CHARGER FAILURE!",
-  "03 BATTERY FAILURE! "
+  "03 BATTERY FAILURE ",
+  "04 COMMAND NOT FOUND!"
 };
 
 TCmd g_Commands[] = {
@@ -221,6 +235,7 @@ TCmd g_Commands[] = {
 // Флаги для управления процессами работы
 //-------------------------------------------------
 BOOL g_Uart0_echo = TRUE;
+BOOL g_Debug_1 = TRUE;
 BOOL g_Debug_measured1 = FALSE;
 BOOL g_Debug_measured2 = FALSE;
 BOOL g_Debug_measured3 = FALSE;
@@ -245,21 +260,20 @@ char g_CmdToExecute[64];                            // Строка команды на исполне
 //-------------------------------------------------
 // Переменные для работы АЦП
 //-------------------------------------------------
-volatile unsigned int g_AdcBuf;                     // Переменная для чтения результата измерения из АЦП
 unsigned char g_CurrentChannel = 0;                 // Текущий номер канала АЦП (0, 1 ... 4)
 
 //-------------------------------------------------
 // Параметры, измеряемые в системе
 //-------------------------------------------------
 
-volatile volatile long  g_Uosn1;
-volatile volatile long  g_Uosn2;
+volatile  int  g_Uosn1;
+volatile int  g_Uosn2;
 
-volatile volatile long  g_Uost1;
-volatile volatile long  g_Uost2;
-volatile volatile long  g_Uost3;
-volatile volatile long  g_Uost4;
-volatile volatile long  g_Uost5;
+volatile int  g_Uost1;
+volatile int  g_Uost2;
+volatile int  g_Uost3;
+volatile int  g_Uost4;
+volatile int  g_Uost5;
 
 //-------------------------------------------------
 // Состояния батарей
@@ -280,57 +294,109 @@ volatile int g_Mode;
 // FUNCTION PROTOTYPES
 //=======================================================================================================================
 
-void        UART0_Init();
-TUartResult UART0_SendMessage(char *msg);
-void        UART0_StartEcho();
-void        UART0_StopEcho();
+void        USART0_Init();
+void        USART0_SendStr(char *str);
+void        USART0_StartEcho();
+void        USART0_StopEcho();
 
-void        Set_LED1(BOOL state);       // Pass ON/OFF parameter for LED1 on or off
-void        Set_LED2(BOOL state);       // Pass ON/OFF parameter for LED2 on or off
-void        Toggle_LED1();              // Toggles LED1
-void        Toggle_LED2();              // Toggles LED2
+void        Set_LED1(BOOL state);               // Pass ON/OFF parameter for LED1 on or off
+void        Set_LED2(BOOL state);               // Pass ON/OFF parameter for LED2 on or off
+void        Toggle_LED1();                      // Toggles LED1
+void        Toggle_LED2();                      // Toggles LED2
 
 void        GPIO_Init();
 
 void        Timer1_Init();
-void        Timer3_Init();              // PWM mode for Uzt
+void        Timer3_Init();                      // PWM mode for Uzt
 
 int         Command_Receive(unsigned char *cmdStr, unsigned char *param1, unsigned char *param2);
 
 void        ADC_Init();
+void        SendMessage(TMsgId msgId, void *param);
+void        DebugMessage(char *msg);
 
 //------------------------------------------------------
 // Функции для обработки команд от внешнего ЭБУ или ПК:
 //------------------------------------------------------
 
-void        Set_StartIt(BOOL state);        // Called for 'start-it' and 'stop-it' commands
-void        Set_StartZU(BOOL state);        // Called for 'start-zu' and 'stop-zu' commands
-void        Set_Uzt(unsigned int value);    // Called for 'set-uzt <value>' command
-void        StartDiagnostic();              // Called for 'start-diagn' command
-void        StopDiagnostic();               // Called for <Esc> command or key press
-void        GetBat1();                      // Called for 'get-bat1; command
-void        GetBat2();                      // Called for 'get-bat2; command
+void        Set_StartIt(BOOL state);            // Called for 'start-it' and 'stop-it' commands
+void        Set_StartZU(BOOL state);            // Called for 'start-zu' and 'stop-zu' commands
+void        Set_Uzt(unsigned int value);        // Called for 'set-uzt <value>' command
+void        StartDiagnostic();                  // Called for 'start-diagn' command
+void        StopDiagnostic();                   // Called for <Esc> command or key press
+void        GetBat1();                          // Called for 'get-bat1; command
+void        GetBat2();                          // Called for 'get-bat2; command
+void        GetUost();                          // Called for 'get-uost; command
+void        GetUosn();                          // Called for 'get-uosn; command
 
+//------------------------------------------------------
+// Функции для обработки команд от внешнего ЭБУ или ПК:
+//------------------------------------------------------
 
 //=======================================================================================================================
 // IMPLEMENTATION
 //=======================================================================================================================
 
+
+/************************************************************************/
+/* Функция:     USART0_Init                                             */
+/* Описание:    Настройка работы последовательного интерфейса USART     */
+/* Параметры:   baudrate - скорость передачи, бит/c                     */
+/************************************************************************/
+void USART0_Init(unsigned int baudrate)
+{
+
+    // параметры кадра данных: 8 Data, 1 Stop, No Parity
+    // USART0 Transmitter: On
+    // USART0 Mode: Asynchronous
+    UCSR0A = 0x00;
+
+    UCSR0B = (1 << TXEN0) | (1 << RXEN0) | (1 << RXCIE0);
+    UCSR0C = (1 << UCSZ01) + (1 << UCSZ00); // 8 bit data frame глава 20.11.4
+
+    UBRR0H = baudrate >> 8;
+    UBRR0L = baudrate;
+}
+
+/************************************************************************************/
+/* Функция:     USART0_SendStr                                                      */
+/* Описание:    Отправляет текстовую строку по последовательному интерфейсу USART   */
+/* Параметры:   str -- pointer to the string to be sent                             */
+/************************************************************************************/
+void USART0_SendStr(char *str)
+{
+    static unsigned char ind;
+
+    //    cli();
+    for(ind = 0; str[ind] != '\0'; ++ind)
+    {
+        // wait for data to be received
+        while(!(UCSR0A & (1<<UDRE0)));
+
+        // send data
+        UDR0 = str[ind];
+
+        if(str[ind] == '\n')
+        break;
+    }
+    //    sei();
+}
+
 /********************************************************/
-/* Функция :        UART0_StartEcho                     */
+/* Функция :        USART0_StartEcho                     */
 /* Описание:        Включает эхо-режим для USART0       */
 /* Параметры:                                           */
 /********************************************************/
-void UART0_StartEcho()
+void USART0_StartEcho()
 {
 }
 
 /********************************************************/
-/* Функция :        UART0_StopEcho                      */
+/* Функция :        USART0_StopEcho                      */
 /* Описание:        Выключает эхо-режим для USART0      */
 /* Параметры:                                           */
 /********************************************************/
-void UART0_StopEcho()
+void USART0_StopEcho()
 {
 }
 
@@ -353,7 +419,6 @@ void Timer1_Init()
     TCCR1B = (1 << CS11);
     TIMSK = (1 << OCIE1A);
     OCR1A = TIMER_PERIOD * 2; // us
-
 }
 
 /************************************************************/
@@ -401,9 +466,7 @@ void GPIO_Init()
     
     tmp = (1 << PIN_TXD0_out) | (1 << PIN_Uzt_out) | (1 << PIN_StartIt_out) | (1 << PIN_Ustir_out) | (1 << PIN_StartZU_out);
     DDRE = tmp;
-    
 }
-
 
 /****************************************************/
 /* Функция:         Set_LED2                        */
@@ -475,63 +538,6 @@ void Toggle_LED2()
     PORTG = tmp;
 }
 
-
-/************************************************************************/
-/* Функция:     USART0_Init                                             */
-/* Описание:    Настройка работы последовательного интерфейса USART     */
-/* Параметры:   baudrate - скорость передачи, бит/c                     */
-/************************************************************************/
-void USART0_Init(unsigned int baudrate)
-{
-
-	// параметры кадра данных: 8 Data, 1 Stop, No Parity
-	// USART0 Transmitter: On
-	// USART0 Mode: Asynchronous
-	UCSR0A = 0x00;
-
-    UCSR0B = (1 << TXEN0) | (1 << RXEN0) | (1 << RXCIE0);
-    UCSR0C = (1 << UCSZ01) + (1 << UCSZ00); // 8 bit data frame глава 20.11.4
-
-	UBRR0H = baudrate >> 8;
-	UBRR0L = baudrate;
-}
-
-/****************************************************************************/
-/* Функция:     USART0_SendChar                                             */
-/* Описание:    Передает текстовый символ по последовательному интерфейсу   */
-/* Параметры:   ch -- текстовый символ для передачи по USART                */
-/****************************************************************************/
-inline void USART0_SendChar(unsigned char ch)
-{
-	// wait for data to be received
-	while(!(UCSR0A & (1<<UDRE0)));
-
-	// send data
-	UDR0 = ch; 
-	
-}
-
-/************************************************************************************/
-/* Функция:     USART0_SendStr                                                      */
-/* Описание:    Отправляет текстовую строку по последовательному интерфейсу USART   */
-/* Параметры:   str -- pointer to the string to be sent                             */
-/************************************************************************************/
-void USART0_SendStr(char *str)
-{
-    static unsigned char ind;
-
-//    cli();
-    for(ind = 0; str[ind] != '\0'; ++ind)
-    {
-        USART0_SendChar(str[ind]);
-
-        if(str[ind] == '\n')
-            break;
-    }
-//    sei();
-}
-
-
 /********************************************************************/
 /* Функция      ADC_Init                                            */
 /* Описание:    Настроить параметры работы АЦП                      */
@@ -547,7 +553,6 @@ void ADC_Init()
     // Turn on ADC, Single conversion mode, Enable ADC interrupts
     // Set conversion frequency to FCPU/128
     ADCSRA = (1<<ADEN) | (1<<ADSC) | (1<<ADIE) | (1<<ADPS2) | (1<<ADPS1) | (1<<ADPS0);
-
 }
 
 
@@ -592,15 +597,14 @@ void Set_StartZU(BOOL state)
 }
 
 /***************************************************************************/
-/* Функция:                                                                */
-/* Описание:        Устанавливает состояние выхода PIN_StartIt_out         */
+/* Функция:         Set_Uzt                                                */
+/* Описание:        Устанавливает состояние выхода PIN_StartIt_out (Uзт)   */
 /* Параметры:       value - значение в мВ с шагом 20 мВ (0...5000)         */
 /***************************************************************************/
 void Set_Uzt(unsigned int value)
 {
     OCR3A = ((value / 100) << 8) / 50;
 }
-
 
 /********************************************************/
 /* Функция:         StartDiagnostic()                   */
@@ -624,14 +628,14 @@ void StopDiagnostic()
 
 /********************************************************/
 /* Функция:         GetBat1                             */
-/* Описание:        Called for 'get-bat1; command       */
+/* Описание:        Called for 'get-bat1' command       */
 /* Параметры:                                           */
 /********************************************************/
 void GetBat1()
 {
     unsigned short i;
     unsigned int bat1 = 0;
-    unsigned char StrBuf[32];
+    char StrBuf[48];
 
     bat1 = PINA + (( PINC & ((1 << PIN_Bat1_09) | (1 << PIN_Bat1_10) | (1 << PIN_Bat1_11) | (1 << PIN_Bat1_12)) ) << 8);
     
@@ -641,11 +645,11 @@ void GetBat1()
     {
         if( (bat1 & (1 << i)) == 0)
         {
-            strcat(StrBuf, "0 ");
+            strcat(StrBuf, "0 ");   //Append string value
         }
         else
         {
-            strcat(StrBuf, "1 ");
+            strcat(StrBuf, "1 ");   //Append string value
         }
     }
     
@@ -655,14 +659,14 @@ void GetBat1()
 
 /********************************************************/
 /* Функция:         GetBat2                             */
-/* Описание:        Called for 'get-bat2; command       */
+/* Описание:        Called for 'get-bat2' command       */
 /* Параметры:                                           */
 /********************************************************/
 void GetBat2()
 {
     unsigned short i;
     unsigned int bat2 = 0;
-    unsigned char StrBuf[32];
+    char StrBuf[48];
 
     bat2 = (PINC >> 4) | (PINB << 4);
     
@@ -682,6 +686,96 @@ void GetBat2()
     
     strcat(StrBuf, ";\r\n");
     USART0_SendStr(StrBuf);
+}
+
+/********************************************************/
+/* Функция:         GetUost                             */
+/* Описание:        Called for 'get-uost' command       */
+/* Параметры:                                           */
+/********************************************************/
+void GetUost()
+{
+    char StrBuf[96];
+    unsigned char hundreds;
+    
+    // Uost1
+    hundreds = g_Uost1 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Uost1=%d.%d%d", g_Uost1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";\t");
+    USART0_SendStr(StrBuf);
+
+    // Uost2
+    hundreds = g_Uost2 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Uost2=%d.%d%d", g_Uost2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";\t");
+    USART0_SendStr(StrBuf);
+
+    // Uost3
+    hundreds = g_Uost3 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Uost3=%d.%d%d", g_Uost3 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";\t");
+    USART0_SendStr(StrBuf);
+
+    // Uost4
+    hundreds = g_Uost4 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Uost4=%d.%d%d", g_Uost4 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";\t");
+    USART0_SendStr(StrBuf);
+
+    // Uost5
+    hundreds = g_Uost5 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Uost5=%d.%d%d", g_Uost5 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";\r\n");
+    USART0_SendStr(StrBuf);
+}
+
+/********************************************************/
+/* Функция:         GetUosn                             */
+/* Описание:        Called for 'get-uosn' command       */
+/* Параметры:                                           */
+/********************************************************/
+void GetUosn()
+{
+    char StrBuf[32];
+    unsigned char hundreds;
+    
+    // Uosn1
+    hundreds = g_Uosn1 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Uost1=%d.%d%d", g_Uosn1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";\t");
+    USART0_SendStr(StrBuf);
+
+    // Uosn2
+    hundreds = g_Uosn2 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Uost1=%d.%d%d", g_Uosn2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";\r\n");
+    USART0_SendStr(StrBuf);
+}
+
+
+/********************************************************************/
+/* Функция:         SendMessage                                     */
+/* Описание:        Отправляет системное сообщение на ПК или ЭБУ    */
+/* Параметры:       msgId - идентификатор сообщения                 */
+/*                  param - указатель на параметр сообщения         */
+/********************************************************************/
+void SendMessage(TMsgId msgId, void *param)
+{
+    USART0_SendStr(g_Messages[msgId]);
+    USART0_SendStr("\r\n");
+}
+
+/********************************************************************/
+/* Функция:         DebugMessage                                    */
+/* Описание:        Отправляет отладочные сообщения на ПК по USART0 */
+/* Параметры:                                                       */
+/********************************************************************/
+void DebugMessage(char *msg)
+{
+    if(g_Debug_1)
+    {
+        USART0_SendStr(msg);
+    }
 }
 
 //=======================================================================================================================
@@ -705,10 +799,7 @@ int main(void)
     ADC_Init();
     StartConvAdc();
     
-    USART0_SendStr("Give me battery\r\n");
-    
-    USART0_SendStr("Power supply Controller ver 1.0\r\n");
-    USART0_SendStr("Ready\r\n");
+    SendMessage(MSG_READY, NULL);
 
     sei();
 
@@ -716,32 +807,26 @@ int main(void)
     {
         if(g_ExecuteCommand == TRUE)
         {
-            USART0_SendStr("\r\n");
-            USART0_SendStr("Searching: ");
-            USART0_SendStr(g_CmdToExecute);
-            USART0_SendStr("\r\n");
-            
             // Найти команду
             for(cmdIndex = 0; g_Commands[cmdIndex].CommandName != NULL; ++cmdIndex)
             {
                 if(strcmp(g_CmdToExecute, g_Commands[cmdIndex].CommandName) == 0)
                 {
-                    USART0_SendStr("Command found!\r\n");
                     switch(g_Commands[cmdIndex].CmdId)
                     {
                         case CMD_START_IT:
                             Set_StartIt(ON);
-                            USART0_SendStr("CMD_START_IT finished!\r\n");
+                            DebugMessage("CMD_START_IT finished!\r\n");
                             break;
                             
                         case CMD_STOP_IT:
                             Set_StartIt(OFF);
-                            USART0_SendStr("CMD_STOP_IT finished!\r\n");
+                            DebugMessage("CMD_STOP_IT finished!\r\n");
                             break;
                             
                         case CMD_START_ZU:
                             Set_StartZU(ON);
-                            USART0_SendStr("CMD_START_ZU finished!\r\n");
+                            DebugMessage("CMD_START_ZU finished!\r\n");
                             break;
                             
                         case CMD_STOP_ZU:
@@ -766,9 +851,11 @@ int main(void)
                             break;
                             
                         case CMD_GET_UOST:
+                            GetUost();
                             break;
                             
                         case CMD_GET_UOSN:
+                            GetUosn();
                             break;
                             
                         case CMD_SET_UZT:
@@ -827,6 +914,7 @@ int main(void)
     }
 }
 
+
 //=======================================================================================================================
 // INTERRUPT HANDLERS
 //=======================================================================================================================
@@ -855,8 +943,10 @@ ISR(TIMER1_COMPA_vect)
 
 ISR(ADC_vect)
 {
-    g_AdcBuf = ADCL;
-    g_AdcBuf = (ADCH << 8) | g_AdcBuf;
+    unsigned long adcBuf;
+
+    adcBuf = ADCL;
+    adcBuf = (ADCH << 8) | adcBuf;
 
     switch(g_CurrentChannel)
     {
@@ -864,44 +954,44 @@ ISR(ADC_vect)
             break;
 
         case CHANNEL_UOSN1:
-            g_Uosn1 = g_AdcBuf * U_OSN1_COEFF;
-            sprintf(g_StrBuf, "Uosn1=%ld\r\n", g_Uosn1);
+            g_Uosn1 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN1_COEFF;
+            sprintf(g_StrBuf, "Uosn1=%d\r\n", g_Uosn1);
             if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
         break;
 
         case CHANNEL_UOST1:
-            g_Uost1 = g_AdcBuf * U_OST1_COEFF;
-            sprintf(g_StrBuf, "Uost1=%ld\r\n", g_Uost1);
+            g_Uost1 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST1_COEFF;
+            sprintf(g_StrBuf, "Uost1=%d\r\n", g_Uost1);
             if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
             break;
 
         case CHANNEL_UOSN2:
-            g_Uosn2 = g_AdcBuf * U_OSN2_COEFF;
-            sprintf(g_StrBuf, "Uosn2=%ld\r\n", g_Uosn2);
+            g_Uosn2 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN2_COEFF;
+            sprintf(g_StrBuf, "Uosn2=%d\r\n", g_Uosn2);
             if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
             break;
 
         case CHANNEL_UOST5:
-            g_Uost5 = g_AdcBuf * U_OST5_COEFF;
-            sprintf(g_StrBuf, "Uost5=%ld\r\n", g_Uost5);
+            g_Uost5 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST5_COEFF;
+            sprintf(g_StrBuf, "Uost5=%d\r\n", g_Uost5);
             if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
             break;
             
         case CHANNEL_UOST4:
-            g_Uost4 = g_AdcBuf * U_OST4_COEFF;
-            sprintf(g_StrBuf, "Uost4=%ld\r\n", g_Uost4);
+            g_Uost4 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST4_COEFF;
+            sprintf(g_StrBuf, "Uost4=%d\r\n", g_Uost4);
             if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
             break;
         
         case CHANNEL_UOST3:
-            g_Uost3 = g_AdcBuf * U_OST3_COEFF;
-            sprintf(g_StrBuf, "Uost3=%ld\r\n", g_Uost3);
+            g_Uost3 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST3_COEFF;
+            sprintf(g_StrBuf, "Uost3=%d\r\n", g_Uost3);
             if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
             break;
         
         case CHANNEL_UOST2:
-            g_Uost2 = g_AdcBuf * U_OST2_COEFF;
-            sprintf(g_StrBuf, "Uost2=%ld\r\n", g_Uost2);
+            g_Uost2 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST2_COEFF;
+            sprintf(g_StrBuf, "Uost2=%d\r\n", g_Uost2);
             if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
             break;
 
