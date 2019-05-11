@@ -234,14 +234,13 @@ TCmd g_Commands[] = {
 //-------------------------------------------------
 // Флаги для управления процессами работы
 //-------------------------------------------------
-BOOL g_Uart0_echo = TRUE;
 BOOL g_Debug_1 = TRUE;
-BOOL g_Debug_measured1 = FALSE;
-BOOL g_Debug_measured2 = FALSE;
-BOOL g_Debug_measured3 = FALSE;
+BOOL g_Debug_2 = FALSE;
 
 volatile BOOL g_ExecuteCommand = FALSE;             // Флаг выставляется при нажатии Enter для
                                                     // исполнения принятой команды в основном цикле
+                                                    
+volatile BOOL g_DiagnosticOn = FALSE;
 //-------------------------------------------------
 // Helper
 //-------------------------------------------------
@@ -613,7 +612,7 @@ void Set_Uzt(unsigned int value)
 /********************************************************/
 void StartDiagnostic()
 {
-    
+    g_DiagnosticOn = TRUE;
 }
 
 /****************************************************/
@@ -623,7 +622,7 @@ void StartDiagnostic()
 /****************************************************/
 void StopDiagnostic()
 {
-    
+    g_DiagnosticOn = FALSE;
 }
 
 /********************************************************/
@@ -761,8 +760,14 @@ void GetUosn()
 /********************************************************************/
 void SendMessage(TMsgId msgId, void *param)
 {
+    USART0_SendStr("\"");
     USART0_SendStr(g_Messages[msgId]);
-    USART0_SendStr("\r\n");
+    
+    if(param != NULL)
+    {
+        
+    }
+    USART0_SendStr("\"\r\n");
 }
 
 /********************************************************************/
@@ -774,7 +779,9 @@ void DebugMessage(char *msg)
 {
     if(g_Debug_1)
     {
+        USART0_SendStr("[");
         USART0_SendStr(msg);
+        USART0_SendStr("]");
     }
 }
 
@@ -805,6 +812,10 @@ int main(void)
 
     while (1) 
     {
+        // -----------------------------------------------------------
+        // HANDLE COMMANDS (Обработка команд)
+        // -----------------------------------------------------------
+        
         if(g_ExecuteCommand == TRUE)
         {
             // Найти команду
@@ -831,15 +842,15 @@ int main(void)
                             
                         case CMD_STOP_ZU:
                             Set_StartZU(OFF);
-                            USART0_SendStr("CMD_STOP_ZU finished!\r\n");
+                            DebugMessage("CMD_STOP_ZU finished!\r\n");
                             break;
 
                         case CMD_VERSION:
-                            USART0_SendStr("Firmware version: " FW_VERSION "\r\n");
+                            USART0_SendStr("@VER="FW_VERSION "\r\n");
                             break;
                             
                         case CMD_GET_BOARD_ID:
-                            USART0_SendStr("Board ID: " BOARD_ID "\r\n");
+                            USART0_SendStr("@ID=" BOARD_ID "\r\n");
                             break;
                             
                         case CMD_GET_BAT1:
@@ -910,6 +921,51 @@ int main(void)
             g_ExecuteCommand = FALSE;
         }
         
+        // -----------------------------------------------------------
+        // POWER SUPPLY STATE CONTROL (Контроль ИТ)
+        // -----------------------------------------------------------
+
+
+
+        // -----------------------------------------------------------
+        // CHARGER STATE CONTROL (Контроль ЗУ)
+        // -----------------------------------------------------------
+
+
+
+
+
+        // -----------------------------------------------------------
+        // CHARGER LEVEL CONTROL (Контроль уровня заряда)
+        // -----------------------------------------------------------
+        // Нужно отслеживать значение 
+
+
+
+
+
+        // -----------------------------------------------------------
+        // 
+        // -----------------------------------------------------------
+
+
+
+
+
+        // -----------------------------------------------------------
+        // HANDLE DIAGNOSTIC
+        // -----------------------------------------------------------
+        if(g_DiagnosticOn == TRUE)
+        {
+            // Check if there is FAILURE STATE
+            
+            
+            // Get all data 
+            GetBat1();
+            GetBat2();
+            GetUosn();
+            GetUost();
+        }
         
     }
 }
@@ -956,43 +1012,43 @@ ISR(ADC_vect)
         case CHANNEL_UOSN1:
             g_Uosn1 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN1_COEFF;
             sprintf(g_StrBuf, "Uosn1=%d\r\n", g_Uosn1);
-            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            if(g_Debug_2) USART0_SendStr(g_StrBuf);
         break;
 
         case CHANNEL_UOST1:
             g_Uost1 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST1_COEFF;
             sprintf(g_StrBuf, "Uost1=%d\r\n", g_Uost1);
-            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            if(g_Debug_2) USART0_SendStr(g_StrBuf);
             break;
 
         case CHANNEL_UOSN2:
             g_Uosn2 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN2_COEFF;
             sprintf(g_StrBuf, "Uosn2=%d\r\n", g_Uosn2);
-            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            if(g_Debug_2) USART0_SendStr(g_StrBuf);
             break;
 
         case CHANNEL_UOST5:
             g_Uost5 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST5_COEFF;
             sprintf(g_StrBuf, "Uost5=%d\r\n", g_Uost5);
-            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            if(g_Debug_2) USART0_SendStr(g_StrBuf);
             break;
             
         case CHANNEL_UOST4:
             g_Uost4 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST4_COEFF;
             sprintf(g_StrBuf, "Uost4=%d\r\n", g_Uost4);
-            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            if(g_Debug_2) USART0_SendStr(g_StrBuf);
             break;
         
         case CHANNEL_UOST3:
             g_Uost3 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST3_COEFF;
             sprintf(g_StrBuf, "Uost3=%d\r\n", g_Uost3);
-            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            if(g_Debug_2) USART0_SendStr(g_StrBuf);
             break;
         
         case CHANNEL_UOST2:
             g_Uost2 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST2_COEFF;
             sprintf(g_StrBuf, "Uost2=%d\r\n", g_Uost2);
-            if(g_Debug_measured1) USART0_SendStr(g_StrBuf);
+            if(g_Debug_2) USART0_SendStr(g_StrBuf);
             break;
 
         default:
