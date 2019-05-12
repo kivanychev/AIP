@@ -102,6 +102,9 @@
 
 #define LED1_FLASH_CNT      500
 
+#define STRING_BUF_LEN      96
+#define CMD_BUF_LEN         96
+
 // ADC constants
 #define CHANNEL_S8          0
 #define CHANNEL_UOSN1       1
@@ -119,10 +122,10 @@
 #define ADC_COEFF           5 * ADC_DIVIDER / ((1 << ADC_DIGITS) - 1)   // Для получения значения в Сотых Долях Вольта
 
 // Коэффициенты для измеряемых параметров
-#define U_OSN1_COEFF    20
+#define U_OSN1_COEFF    1
 #define U_OST1_COEFF    20
 
-#define U_OSN2_COEFF    1
+#define U_OSN2_COEFF    20
 #define U_OST5_COEFF    1
 #define U_OST4_COEFF    1
 #define U_OST3_COEFF    1
@@ -241,20 +244,21 @@ volatile BOOL g_ExecuteCommand = FALSE;             // Флаг выставляется при наж
                                                     // исполнения принятой команды в основном цикле
                                                     
 volatile BOOL g_DiagnosticOn = FALSE;
+volatile BOOL g_FinishDiagnostic = FALSE;
 //-------------------------------------------------
 // Helper
 //-------------------------------------------------
 
 unsigned int g_led1_flash_cnt = LED1_FLASH_CNT;
-char g_StrBuf[64];
+char g_StrBuf[STRING_BUF_LEN];
 
 //-------------------------------------------------
 // Command buffer variables
 //-------------------------------------------------
-char g_CmdBuffer[64];
+char g_CmdBuffer[CMD_BUF_LEN];
 unsigned short g_CmdSymbolIndex = 0;
 
-char g_CmdToExecute[64];                            // Строка команды на исполнение
+char g_CmdToExecute[CMD_BUF_LEN];                            // Строка команды на исполнение
 
 //-------------------------------------------------
 // Переменные для работы АЦП
@@ -265,7 +269,7 @@ unsigned char g_CurrentChannel = 0;                 // Текущий номер канала АЦП 
 // Параметры, измеряемые в системе
 //-------------------------------------------------
 
-volatile  int  g_Uosn1;
+volatile int  g_Uosn1;
 volatile int  g_Uosn2;
 
 volatile int  g_Uost1;
@@ -313,6 +317,7 @@ int         Command_Receive(unsigned char *cmdStr, unsigned char *param1, unsign
 void        ADC_Init();
 void        SendMessage(TMsgId msgId, void *param);
 void        DebugMessage(char *msg);
+void        DebugMessageLn(char *msg);
 
 //------------------------------------------------------
 // Функции для обработки команд от внешнего ЭБУ или ПК:
@@ -382,7 +387,7 @@ void USART0_SendStr(char *str)
 }
 
 /********************************************************/
-/* Функция :        USART0_StartEcho                     */
+/* Функция :        USART0_StartEcho                    */
 /* Описание:        Включает эхо-режим для USART0       */
 /* Параметры:                                           */
 /********************************************************/
@@ -622,7 +627,11 @@ void StartDiagnostic()
 /****************************************************/
 void StopDiagnostic()
 {
-    g_DiagnosticOn = FALSE;
+    if(g_DiagnosticOn == TRUE)
+    {
+        g_DiagnosticOn = FALSE;
+        g_FinishDiagnostic = TRUE;
+    }    
 }
 
 /********************************************************/
@@ -634,7 +643,7 @@ void GetBat1()
 {
     unsigned short i;
     unsigned int bat1 = 0;
-    char StrBuf[48];
+    char StrBuf[STRING_BUF_LEN];
 
     bat1 = PINA + (( PINC & ((1 << PIN_Bat1_09) | (1 << PIN_Bat1_10) | (1 << PIN_Bat1_11) | (1 << PIN_Bat1_12)) ) << 8);
     
@@ -665,7 +674,7 @@ void GetBat2()
 {
     unsigned short i;
     unsigned int bat2 = 0;
-    char StrBuf[48];
+    char StrBuf[STRING_BUF_LEN];
 
     bat2 = (PINC >> 4) | (PINB << 4);
     
@@ -694,7 +703,7 @@ void GetBat2()
 /********************************************************/
 void GetUost()
 {
-    char StrBuf[96];
+    char StrBuf[STRING_BUF_LEN];
     unsigned char hundreds;
     
     // Uost1
@@ -735,18 +744,18 @@ void GetUost()
 /********************************************************/
 void GetUosn()
 {
-    char StrBuf[32];
+    char StrBuf[STRING_BUF_LEN];
     unsigned char hundreds;
     
     // Uosn1
     hundreds = g_Uosn1 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uost1=%d.%d%d", g_Uosn1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    sprintf(StrBuf, "@Uosn1=%d.%d%d", g_Uosn1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
     strcat(StrBuf, ";\t");
     USART0_SendStr(StrBuf);
 
     // Uosn2
     hundreds = g_Uosn2 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uost1=%d.%d%d", g_Uosn2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    sprintf(StrBuf, "@Uosn2=%d.%d%d", g_Uosn2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
     strcat(StrBuf, ";\r\n");
     USART0_SendStr(StrBuf);
 }
@@ -785,6 +794,23 @@ void DebugMessage(char *msg)
     }
 }
 
+
+/********************************************************************/
+/* Функция:         DebugMessageLn                                  */
+/* Описание:        Отправляет отладочные сообщения на ПК по USART0 */
+/*                  с переводом на новую строку после текста        */
+/* Параметры:       msg -- текст сообщения                          */
+/********************************************************************/
+void DebugMessageLn(char *msg)
+{
+    if(g_Debug_1)
+    {
+        USART0_SendStr("[");
+        USART0_SendStr(msg);
+        USART0_SendStr("]\r\n");
+    }
+}
+
 //=======================================================================================================================
 // PROGRAM ENTRY POINT
 //=======================================================================================================================
@@ -795,6 +821,13 @@ void DebugMessage(char *msg)
 /****************************************/
 int main(void)
 {
+    char StrBuf[STRING_BUF_LEN];
+    char strUp[4];
+    strUp[0] = 27;
+    strUp[1] = '[';
+    strUp[2] = 'A';
+    strUp[3] = 0;
+
     unsigned short cmdIndex;
 
     GPIO_Init();
@@ -827,22 +860,22 @@ int main(void)
                     {
                         case CMD_START_IT:
                             Set_StartIt(ON);
-                            DebugMessage("CMD_START_IT finished!\r\n");
+                            DebugMessageLn("CMD_START_IT finished!");
                             break;
                             
                         case CMD_STOP_IT:
                             Set_StartIt(OFF);
-                            DebugMessage("CMD_STOP_IT finished!\r\n");
+                            DebugMessageLn("CMD_STOP_IT finished!");
                             break;
                             
                         case CMD_START_ZU:
                             Set_StartZU(ON);
-                            DebugMessage("CMD_START_ZU finished!\r\n");
+                            DebugMessageLn("CMD_START_ZU finished!");
                             break;
                             
                         case CMD_STOP_ZU:
                             Set_StartZU(OFF);
-                            DebugMessage("CMD_STOP_ZU finished!\r\n");
+                            DebugMessageLn("CMD_STOP_ZU finished!");
                             break;
 
                         case CMD_VERSION:
@@ -870,7 +903,7 @@ int main(void)
                             break;
                             
                         case CMD_SET_UZT:
-                            USART0_SendStr("Setting Uzt to: ");
+                            DebugMessage("Setting Uzt to: ");
 
                             // Найти поле параметра команды
                             char *param = &(g_CmdToExecute[0]);
@@ -881,12 +914,12 @@ int main(void)
                             }
                             param++;
 
-                            USART0_SendStr(param);
-                            USART0_SendStr("\r\n");
+                            DebugMessageLn(param);
+
                             value = atoi(param);
-                            sprintf(g_StrBuf, "value=%d", value);
-                            USART0_SendStr(g_StrBuf);
-                            USART0_SendStr("\r\n");
+                            sprintf(StrBuf, "value=%d", value);
+
+                            DebugMessageLn(StrBuf);
                             
                             Set_Uzt(value);
                             
@@ -901,6 +934,7 @@ int main(void)
                             break;
 
                         case CMD_START_DIAGN:
+                            DebugMessageLn("Starting diagnostic mode!");
                             StartDiagnostic();
                             break;
                         
@@ -915,7 +949,7 @@ int main(void)
         
             if(g_Commands[cmdIndex].CommandName == NULL)
             {
-                 USART0_SendStr("Not found!\r\n");
+                 SendMessage(MSG_COMMAND_NOT_FOUND, NULL);
             }
             
             g_ExecuteCommand = FALSE;
@@ -945,26 +979,38 @@ int main(void)
 
 
         // -----------------------------------------------------------
-        // 
+        // FINISH DIAGNOSTIC
         // -----------------------------------------------------------
-
+        if(g_FinishDiagnostic == TRUE)
+        {
+            g_FinishDiagnostic = FALSE;
+            USART0_SendStr("\r\n");
+            USART0_SendStr("\r\n");
+            USART0_SendStr("\r\n");
+            USART0_SendStr("\r\n");
+            USART0_SendStr("\r\n");
+        }
 
 
 
 
         // -----------------------------------------------------------
-        // HANDLE DIAGNOSTIC
+        // HANDLE DIAGNOSTIC (Диагностика)
         // -----------------------------------------------------------
         if(g_DiagnosticOn == TRUE)
         {
             // Check if there is FAILURE STATE
-            
-            
+                        
             // Get all data 
             GetBat1();
             GetBat2();
             GetUosn();
             GetUost();
+            
+            USART0_SendStr(strUp);
+            USART0_SendStr(strUp);
+            USART0_SendStr(strUp);
+            USART0_SendStr(strUp);                        
         }
         
     }
@@ -1094,14 +1140,14 @@ ISR(USART0_RX_vect)
         case KEY_ENTER:
             if(g_CmdSymbolIndex == 0)
             {
-                USART0_SendStr("No Command entered\r\n");
+                USART0_SendStr("\r\n");
                 break;
             }
             
             g_CmdBuffer[g_CmdSymbolIndex] = '\0';   // Зафиксировать окончание команды
             
             // Скопировать принятую команду в строку команды для исполнения
-            for(ind = 0; g_CmdBuffer[ind] != '\0'; ++ind)
+            for(ind = 0; g_CmdBuffer[ind] != '\0' && ind < CMD_BUF_LEN; ++ind)
             {
                 g_CmdToExecute[ind] = g_CmdBuffer[ind];
                 
@@ -1130,6 +1176,11 @@ ISR(USART0_RX_vect)
         default:
             g_CmdBuffer[g_CmdSymbolIndex] = ch;
             g_CmdSymbolIndex++;
+
+            if(g_CmdSymbolIndex > CMD_BUF_LEN)
+            {
+                g_CmdSymbolIndex--;
+            }
 
             UDR0 = ch;
             break;
