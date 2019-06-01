@@ -33,6 +33,9 @@
 #define ON                  1
 #define OFF                 0
 
+// Battery parameters
+#define SECTIONS_COUNT      12
+
 // Functional pin names for PORTA
 #define PIN_Bat1_01         PA0
 #define PIN_Bat1_02         PA1
@@ -180,7 +183,8 @@ typedef enum {
     MSG_POWER_SUPPLY_FAILURE,
     MSG_CHARGER_FAILURE,
     MSG_BATTERY_FAILURE,
-    MSG_COMMAND_NOT_FOUND
+    MSG_COMMAND_NOT_FOUND,
+    MSG_SYSTEM_ERROR
     
 } TMsgId;
 
@@ -206,10 +210,11 @@ typedef struct {
 
 char *g_Messages[] = {
   "00 ГОТОВ",
-  "01 POWER SUPPLY FAILURE!",
-  "02 CHARGER FAILURE!",
-  "03 BATTERY FAILURE ",
-  "04 COMMAND NOT FOUND!"
+  "01 НЕИСПРАВНСТЬ ИТ!",
+  "02 НЕИСПРАВНОСТЬ ЗУ!",
+  "03 НЕИСПРАВНОСТЬ АБ ",
+  "04 НЕИЗВЕСТНАЯ КОМАНДА!",
+  "05 СИСТЕМА НЕИСПРАВНА!"
 };
 
 TCmd g_Commands[] = {
@@ -293,6 +298,12 @@ volatile volatile long  g_US8;
 volatile int g_State;
 volatile int g_Mode;
 
+//-------------------------------------------------
+// Состояния ошибок
+//-------------------------------------------------
+
+volatile int g_FailureCounter = 0;
+
 //=======================================================================================================================
 // FUNCTION PROTOTYPES
 //=======================================================================================================================
@@ -324,7 +335,9 @@ void        DebugMessageLn(char *msg);
 //------------------------------------------------------
 
 void        Set_StartIt(BOOL state);            // Called for 'start-it' and 'stop-it' commands
+BOOL        Get_StartIt();
 void        Set_StartZU(BOOL state);            // Called for 'start-zu' and 'stop-zu' commands
+BOOL        Get_StartZU();
 void        Set_Uzt(unsigned int value);        // Called for 'set-uzt <value>' command
 void        StartDiagnostic();                  // Called for 'start-diagn' command
 void        StopDiagnostic();                   // Called for <Esc> command or key press
@@ -334,8 +347,11 @@ void        GetUost();                          // Called for 'get-uost; command
 void        GetUosn();                          // Called for 'get-uosn; command
 
 //------------------------------------------------------
-// Функции для обработки команд от внешнего ЭБУ или ПКє
+// Функции для настройки работы системы
 //------------------------------------------------------
+
+void        InitializeController();
+void        Failure(unsigned int delay);
 
 //=======================================================================================================================
 // IMPLEMENTATION
@@ -462,7 +478,7 @@ void GPIO_Init()
     
     PORTA = 0xFF;   // Pull-ups at Battery inputs
     PORTB = 0xFF;   // Pull-ups at Battery inputs
-    PORTC = 0xFF;   // Pull-ups at Battery inputs
+    //PORTC = 0xFF;   // Pull-ups at Battery inputs
     
     // Set up LEDs as outputs
     tmp = (1 << LED1) | (1 << LED2);
@@ -580,9 +596,23 @@ void Set_StartIt(BOOL state)
     PORTE = tmp;
 }
 
+/********************************************************************/
+/* Функция:         Get_StartIt                                     */
+/* Описание:        Читает состояние выхода PIN_StartIt_out         */
+/********************************************************************/
+BOOL Get_StartIt()
+{
+    unsigned char state;
+
+    state = PORTE;
+    state = state & (1 << PIN_StartIt_out);   // Прочитать состояние ИТ
+    
+    return state > 0;
+}
+
 /*********************************************************************/
-/* Функция:                                                          */
-/* Описание:        Устанавливает состояние выхода PIN_StartIt_out   */
+/* Функция:         Set_StartZU                                      */
+/* Описание:        Устанавливает состояние выхода PIN_StartZu_out   */
 /* Параметры:       state - новое состояние                          */
 /*********************************************************************/
 void Set_StartZU(BOOL state)
@@ -598,6 +628,22 @@ void Set_StartZU(BOOL state)
     }
 
     PORTE = tmp;
+}
+
+/********************************************************************/
+/* Функция:         Get_StartZU                                     */
+/* Описание:        Яитает состояние выхода PIN_StartIt_out         */
+/* Параметры:       state - новое состояние                         */
+/********************************************************************/
+BOOL Get_StartZU()
+{
+    unsigned char state;
+
+    state = PORTE;
+    state = state & (1 << PIN_StartZU_out);   // Прочитать состояние ИТ
+    
+    return state > 0;
+    
 }
 
 /***************************************************************************/
@@ -649,7 +695,7 @@ void GetBat1()
     
     sprintf(StrBuf, "@BAT1 = ");
     
-    for(i = 0; i < 12; ++i)
+    for(i = 0; i < SECTIONS_COUNT; ++i)
     {
         if( (bat1 & (1 << i)) == 0)
         {
@@ -680,7 +726,7 @@ void GetBat2()
     
     sprintf(StrBuf, "@BAT2 = ");
     
-    for(i = 0; i < 12; ++i)
+    for(i = 0; i < SECTIONS_COUNT; ++i)
     {
         if( (bat2 & (1 << i)) == 0)
         {
@@ -769,13 +815,26 @@ void GetUosn()
 /********************************************************************/
 void SendMessage(TMsgId msgId, void *param)
 {
+    // Начало строки сообщения
     USART0_SendStr("\"");
+    
+    // Основное сообщение строки сообщения
     USART0_SendStr(g_Messages[msgId]);
     
     if(param != NULL)
     {
-        
+        switch (msgId)
+        {
+            case MSG_BATTERY_FAILURE:
+                USART0_SendStr( (char *)param);
+                break;
+            
+            default:
+                break;
+        }
     }
+    
+    // Завершение строки сообщения
     USART0_SendStr("\"\r\n");
 }
 
@@ -811,6 +870,44 @@ void DebugMessageLn(char *msg)
     }
 }
 
+
+/********************************************************************/
+/* Функция:         InitializeController*/
+/* Описание:        Отправляет отладочные сообщения на ПК по USART0 */
+/*                  с переводом на новую строку после текста        */
+/* Параметры:       msg -- текст сообщения                          */
+/********************************************************************/
+void InitializeController()
+{
+    SendMessage(MSG_READY, NULL);
+
+    Set_StartZU(FALSE);
+    Set_StartIt(FALSE);
+    Set_Uzt(4000);
+}
+
+/********************************************************************/
+/* Функция:         Failure                                         */
+/* Описание:        Отключает ИТ и ЗУ через время delay             */
+/* Параметры:       delay -- время задаржки перед отключением, мс   */
+/********************************************************************/
+void Failure(unsigned int delay)
+{
+    g_FailureCounter++;
+    
+    if(g_FailureCounter >=3)
+    {
+        // Отправить сообщение об ошибке
+        SendMessage(MSG_SYSTEM_ERROR, NULL);
+    }
+
+    // Выключить ЗУ и ИТ
+    Set_StartZU(FALSE);
+    Set_StartIt(FALSE);
+}
+
+
+
 //=======================================================================================================================
 // PROGRAM ENTRY POINT
 //=======================================================================================================================
@@ -839,12 +936,19 @@ int main(void)
     ADC_Init();
     StartConvAdc();
     
-    SendMessage(MSG_READY, NULL);
-
+    InitializeController();
+    
     sei();
 
     while (1) 
     {
+        // Проверить, работоспособность системы
+        if(g_FailureCounter >= 3)
+        {
+            // ST_FAILURE
+            continue;
+        }
+        
         // -----------------------------------------------------------
         // HANDLE COMMANDS (Обработка команд)
         // -----------------------------------------------------------
@@ -860,22 +964,22 @@ int main(void)
                     {
                         case CMD_START_IT:
                             Set_StartIt(ON);
-                            DebugMessageLn("CMD_START_IT finished!");
+                            DebugMessageLn("CMD_START_IT выполнено");
                             break;
                             
                         case CMD_STOP_IT:
                             Set_StartIt(OFF);
-                            DebugMessageLn("CMD_STOP_IT finished!");
+                            DebugMessageLn("CMD_STOP_IT");
                             break;
                             
                         case CMD_START_ZU:
                             Set_StartZU(ON);
-                            DebugMessageLn("CMD_START_ZU finished!");
+                            DebugMessageLn("CMD_START_ZU выполнено");
                             break;
                             
                         case CMD_STOP_ZU:
                             Set_StartZU(OFF);
-                            DebugMessageLn("CMD_STOP_ZU finished!");
+                            DebugMessageLn("CMD_STOP_ZU выполнено");
                             break;
 
                         case CMD_VERSION:
@@ -955,14 +1059,56 @@ int main(void)
             g_ExecuteCommand = FALSE;
         }
         
+        
         // -----------------------------------------------------------
-        // POWER SUPPLY STATE CONTROL (Контроль ИТ©
+        // BATTERIES STATE CONTROL (Контроль состояния батарей)
+        // -----------------------------------------------------------
+        
+        if(Get_StartIt() == TRUE || Get_StartZU() == TRUE)
+        {    
+            unsigned int bat1, bat2;
+            int i;
+            unsigned char failedSection = 0;
+        
+            // Прочесть состояния батарей
+            bat1 = PINA + (( PINC & ((1 << PIN_Bat1_09) | (1 << PIN_Bat1_10) | (1 << PIN_Bat1_11) | (1 << PIN_Bat1_12)) ) << 8);
+            bat2 = (PINC >> 4) | (PINB << 4);
+        
+            // Найти неисправные секции в батареях
+            for(i = 0; i < SECTIONS_COUNT; ++i)
+            {
+                if( (bat1 & (1 << i)) == 0)
+                {
+                    failedSection = i + 1;
+                    sprintf(StrBuf, "1:%d", failedSection);
+                    SendMessage(MSG_BATTERY_FAILURE, StrBuf);
+                }
+
+                if( (bat2 & (1 << i)) == 0)
+                {
+                    failedSection = i + 1;
+                    sprintf(StrBuf, "2:%d", failedSection);
+                    SendMessage(MSG_BATTERY_FAILURE, StrBuf);
+                }
+            }
+
+            if(failedSection != 0)
+            {
+                // Перейти на следующий цикл работы в случае 
+                // обнаруженных неисправных секций
+                Failure(0);
+                continue;
+            }
+        }
+        
+        // -----------------------------------------------------------
+        // POWER SUPPLY STATE CONTROL (Контроль ИТ)
         // -----------------------------------------------------------
 
 
 
         // -----------------------------------------------------------
-        // CHARGER STATE CONTROL (Контроль ЗУ©
+        // CHARGER STATE CONTROL (Контроль ЗУ)
         // -----------------------------------------------------------
 
 
@@ -979,7 +1125,7 @@ int main(void)
 
 
         // -----------------------------------------------------------
-        // FINISH DIAGNOSTIC
+        // FINISH DIAGNOSTIC (Завершить режим диагностики)
         // -----------------------------------------------------------
         if(g_FinishDiagnostic == TRUE)
         {
@@ -995,7 +1141,7 @@ int main(void)
 
 
         // -----------------------------------------------------------
-        // HANDLE DIAGNOSTIC (Диагностика)
+        // HANDLE DIAGNOSTIC (Диагностика: непрерывное отображение измеренных параметров) 
         // -----------------------------------------------------------
         if(g_DiagnosticOn == TRUE)
         {
