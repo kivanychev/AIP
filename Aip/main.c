@@ -103,7 +103,7 @@
 #define UZT_HALF            0x7F
 #define UZT_ZERO            0x01
 
-#define LED1_FLASH_CNT      500
+#define LED1_FLASH_CNT      100
 
 #define STRING_BUF_LEN      96
 #define CMD_BUF_LEN         96
@@ -289,7 +289,7 @@ volatile int  g_Uost5;
 volatile BOOL g_BatState1[12];
 volatile BOOL g_BatState2[12];
 
-volatile volatile long  g_US8;
+volatile long  g_US8;
 
 //-------------------------------------------------
 // Состояния и режимы системы
@@ -303,6 +303,19 @@ volatile int g_Mode;
 //-------------------------------------------------
 
 volatile int g_FailureCounter = 0;
+
+//-------------------------------------------------
+// Таймеры
+// Нужно задать начальное значение в тиках.
+// Каждый тик составляет 100 мс.
+// Значение каждой переменной таймера будет 
+// уменьшаться на 1 с интервалом времени тика.
+//-------------------------------------------------
+
+volatile unsigned int g_Timer0 = 0;
+volatile unsigned int g_Timer1 = 0;
+volatile unsigned int g_Timer2 = 0;
+
 
 //=======================================================================================================================
 // FUNCTION PROTOTYPES
@@ -320,7 +333,7 @@ void        Toggle_LED2();                      // Toggles LED2
 
 void        GPIO_Init();
 
-void        Timer1_Init();
+void        Timer1_Init();                      // Time counter
 void        Timer3_Init();                      // PWM mode for Uzt
 
 int         Command_Receive(unsigned char *cmdStr, unsigned char *param1, unsigned char *param2);
@@ -423,22 +436,22 @@ void USART0_StopEcho()
 /************************************************************************************/
 /* Функция :        Timer1_Init                                                     */
 /* Описание:        Настраивает параметры Timer1 Для отсчета системного времени     */
-/* Параметры:                                                                       */
+/* Параметры:       -                                                               */
 /************************************************************************************/
 void Timer1_Init()
 {
     /********************************/
     /* Initialize Timer0            */
     /* Measures time                */
-    /* Clock prescaler CKL/8        */
-    /* Operation mode: CTC: WGM=010 */
+    /* Clock prescaler CKL/256      */
+    /* Operation mode: CTC: WGM=0100*/
     /* Interrupt on Compare Match   */
     /********************************/
 
-    TCCR1A = (1 << WGM11);
-    TCCR1B = (1 << CS11);
+    TCCR1A = 0;
+    TCCR1B = (1 << WGM12) | (1 << CS12);   //CTC mode CLK / 256
     TIMSK = (1 << OCIE1A);
-    OCR1A = TIMER_PERIOD * 2; // us
+    OCR1A = 625;            // 625 * 16 us = 10 000 us = 10 ms (tick time)
 }
 
 /************************************************************/
@@ -478,7 +491,7 @@ void GPIO_Init()
     
     PORTA = 0xFF;   // Pull-ups at Battery inputs
     PORTB = 0xFF;   // Pull-ups at Battery inputs
-    //PORTC = 0xFF;   // Pull-ups at Battery inputs
+    PORTC = 0xFF;   // Pull-ups at Battery inputs
     
     // Set up LEDs as outputs
     tmp = (1 << LED1) | (1 << LED2);
@@ -929,6 +942,7 @@ int main(void)
 
     GPIO_Init();
     Timer3_Init();
+    Timer1_Init();
 
     Toggle_LED2();   
     USART0_Init(MYUBRR);
@@ -940,6 +954,9 @@ int main(void)
     
     sei();
 
+    g_Timer0 = 300; // 3 sec
+    DebugMessageLn("Start 3 seconds count");
+
     while (1) 
     {
         // Проверить, работоспособность системы
@@ -948,6 +965,29 @@ int main(void)
             // ST_FAILURE
             continue;
         }
+        
+        switch(g_Timer0)
+        {
+            case 300:
+                DebugMessageLn("3 sec");
+                break;
+                
+            case 200:
+                DebugMessageLn("2 sec");
+                break;
+                
+            case 100:
+                DebugMessageLn("1 sec");
+                break;
+                
+            case 1:
+                DebugMessageLn("0 sec");
+                break;
+
+            default:                
+                break;
+        }
+        
         
         // -----------------------------------------------------------
         // HANDLE COMMANDS (Обработка команд)
@@ -1167,10 +1207,12 @@ int main(void)
 // INTERRUPT HANDLERS
 //=======================================================================================================================
 
-/*********************************************************************/
-/* Функция:     Обработчик прерывания Timer1 по событию Compare A    */
-/* Описание:                                                         */
-/*********************************************************************/
+/********************************************************************/
+/* Функция:     Обработчик прерывания Timer1 по событию Compare A   */
+/* Описание:    счетчик заданного времени в тиках                   */
+/*              считает время в переменных g_Timer0,  g_Timer1  и   */
+/*              g_Timer2                                            */
+/********************************************************************/
 
 ISR(TIMER1_COMPA_vect)
 {
@@ -1179,6 +1221,21 @@ ISR(TIMER1_COMPA_vect)
     {
         Toggle_LED2();
         g_led1_flash_cnt = LED1_FLASH_CNT;
+    }
+
+    if( g_Timer0 > 0)
+    {
+        g_Timer0 --;
+    }
+    
+    if( g_Timer1 > 0)
+    {
+        g_Timer1 --;
+    }
+
+    if( g_Timer2 > 0)
+    {
+        g_Timer2 --;
     }
 
 }
