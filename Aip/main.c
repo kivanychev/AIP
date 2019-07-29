@@ -184,7 +184,8 @@ typedef enum {
     MSG_CHARGER_FAILURE,
     MSG_BATTERY_FAILURE,
     MSG_COMMAND_NOT_FOUND,
-    MSG_SYSTEM_ERROR
+    MSG_SYSTEM_ERROR,
+    MSG_LOAD_ERROR
     
 } TMsgId;
 
@@ -208,20 +209,22 @@ typedef struct {
 // LOCAL VARIABLES
 //=======================================================================================================================
 
+// Message ID defined in TMsgId
 char *g_Messages[] = {
   "00 ГОТОВ",
   "01 НЕИСПРАВНСТЬ ИТ!",
   "02 НЕИСПРАВНОСТЬ ЗУ!",
   "03 НЕИСПРАВНОСТЬ АБ ",
   "04 НЕИЗВЕСТНАЯ КОМАНДА!",
-  "05 СИСТЕМА НЕИСПРАВНА!"
+  "05 СИСТЕМА НЕИСПРАВНА!",
+  "06 НЕИСПРАВНОСТЬ НАГРУЗКИ!"
 };
 
 TCmd g_Commands[] = {
     { "start-it",           CMD_START_IT},          // Запустить Источник Тока  
     { "stop-it",            CMD_STOP_IT},           // Остановить Источник Тока
 
-    { "start-zu",           CMD_START_ZU},          // Запустить зарядное устройство (ЗУ©
+    { "start-zu",           CMD_START_ZU},          // Запустить зарядное устройство (ЗУ)
     { "stop-zu",            CMD_STOP_ZU},           // Остановить ЗУ
 
     { "version",            CMD_VERSION},           // Получить версию ПО
@@ -231,7 +234,7 @@ TCmd g_Commands[] = {
     { "get-bat2",           CMD_GET_BAT2},		    // Получить разово на консоли состояние секций батареи 2
     { "get-uost",           CMD_GET_UOST},          // Получить разово на консоли  значения напряжений Uoст1, … Uост5
     { "get-uosn",           CMD_GET_UOSN},		    // Получить разово на консоли  значения напряжений Uoсн1, Uосн2
-    { "set-uzt",            CMD_SET_UZT},           // Установить напряжение задания на ток (0...5000мВ© напряжение мВ
+    { "set-uzt",            CMD_SET_UZT},           // Установить напряжение задания на ток (0...5000 мВ) напряжение мВ
     { "ustir-on",           CMD_USTIR_ON},          // Включить режим “Юстировка”
     { "ustir-off",          CMD_USTIR_OFF},         // Отключить режим “Юстировка”
     { "start-diagn",        CMD_START_DIAGN},       // Запустить режим “Непрерывная диагностика”
@@ -243,13 +246,15 @@ TCmd g_Commands[] = {
 // Флаги для управления процессами работы
 //-------------------------------------------------
 BOOL g_Debug_1 = TRUE;
-BOOL g_Debug_2 = FALSE;
 
 volatile BOOL g_ExecuteCommand = FALSE;             // Флаг выставляется при нажатии Enter для
                                                     // исполнения принятой команды в основном цикле
-                                                    
+
 volatile BOOL g_DiagnosticOn = FALSE;
 volatile BOOL g_FinishDiagnostic = FALSE;
+
+volatile BOOL g_FailureOn = FALSE;
+
 //-------------------------------------------------
 // Helper
 //-------------------------------------------------
@@ -274,6 +279,7 @@ unsigned char g_CurrentChannel = 0;                 // Текущий номер
 // Параметры, измеряемые в системе
 //-------------------------------------------------
 
+// Значения, измеренные на входах АЦП (0..5В)
 volatile int  g_Uosn1;
 volatile int  g_Uosn2;
 
@@ -282,6 +288,22 @@ volatile int  g_Uost2;
 volatile int  g_Uost3;
 volatile int  g_Uost4;
 volatile int  g_Uost5;
+
+// Параметры на основе измеренных значений со входов АЦП
+volatile int  g_Uab;        // g_Uosn1 * 20
+volatile int  g_Unagr;      // g_Uosn2 * 20
+
+volatile int  g_Uzab;       // g_Uost1 - 2.5V
+volatile int  g_Uk1;        // g_Uost2 - 2.5V
+volatile int  g_Uk2;        // g_Uost3 - 2.5V
+volatile int  g_Uk3;        // g_Uost4 - 2.5V
+volatile int  g_Uust;       // g_Uost5 - 2.5V
+
+volatile int  g_Izab;       // g_Uzab * KT
+volatile int  g_Ik1;        // g_Ik1 * KT
+volatile int  g_Ik2;        // g_Ik2 * KT
+volatile int  g_Ik3;        // g_Ik3 * KT
+volatile int  g_Iust;       // g_Uust * KT
 
 //-------------------------------------------------
 // Состояния батарей
@@ -312,8 +334,8 @@ volatile int g_FailureCounter = 0;
 // уменьшаться на 1 с интервалом времени тика.
 //-------------------------------------------------
 
-volatile unsigned int g_Timer0 = 0;
-volatile unsigned int g_Timer1 = 0;
+volatile unsigned int g_Timer0 = 0;     // For fun in main()
+volatile unsigned int g_Timer1 = 0;     // For handling Failure
 volatile unsigned int g_Timer2 = 0;
 
 
@@ -323,8 +345,6 @@ volatile unsigned int g_Timer2 = 0;
 
 void        USART0_Init();
 void        USART0_SendStr(char *str);
-void        USART0_StartEcho();
-void        USART0_StopEcho();
 
 void        Set_LED1(BOOL state);               // Pass ON/OFF parameter for LED1 on or off
 void        Set_LED2(BOOL state);               // Pass ON/OFF parameter for LED2 on or off
@@ -366,9 +386,12 @@ void        GetUosn();                          // Called for 'get-uosn; command
 void        InitializeController();
 void        Failure(unsigned int delay);
 
+
+
 //=======================================================================================================================
-// IMPLEMENTATION
+//                      ФУНКЦИИ НАСТРОЙКИ АППАРАТНОЙ ЧАСТИ МИКРОКОНТРОЛЛЕРА
 //=======================================================================================================================
+
 
 
 /************************************************************************/
@@ -415,27 +438,10 @@ void USART0_SendStr(char *str)
     //    sei();
 }
 
-/********************************************************/
-/* Функция :        USART0_StartEcho                    */
-/* Описание:        Включает эхо-режим для USART0       */
-/* Параметры:                                           */
-/********************************************************/
-void USART0_StartEcho()
-{
-}
-
-/********************************************************/
-/* Функция :        USART0_StopEcho                      */
-/* Описание:        Выключает эхо-режим для USART0      */
-/* Параметры:                                           */
-/********************************************************/
-void USART0_StopEcho()
-{
-}
-
 /************************************************************************************/
 /* Функция :        Timer1_Init                                                     */
 /* Описание:        Настраивает параметры Timer1 Для отсчета системного времени     */
+/*                  с шагом 10 мс                                                   */
 /* Параметры:       -                                                               */
 /************************************************************************************/
 void Timer1_Init()
@@ -476,10 +482,11 @@ void Timer3_Init()
     OCR3A = UZT_HALF;    // Set Chagre current to HALF of max
 }
 
-/************************************************************************************************************/
-/* Функция:         GPIO_Init                                                                               */
-/* Описание:        Настраивает параметры выподов микроконтроллера в соответствии с назначением по схеме    */
-/************************************************************************************************************/
+/**************************************************************************/
+/* Функция:         GPIO_Init                                             */
+/* Описание:        Настраивает параметры выподов микроконтроллера в      */
+/*                    соответствии с назначением по                       */
+/**************************************************************************/
 void GPIO_Init()
 {
     unsigned char tmp = 0; 
@@ -587,7 +594,9 @@ void ADC_Init()
     // Set conversion frequency to FCPU/128
     ADCSRA = (1<<ADEN) | (1<<ADSC) | (1<<ADIE) | (1<<ADPS2) | (1<<ADPS1) | (1<<ADPS0);
 }
-
+//=======================================================================================================================
+//                      ОПЕРАЦИОННЫЕ ФУНКЦИИ КОНТРОЛЛЕРА АБ
+//=======================================================================================================================
 
 /********************************************************************/
 /* Функция:         Set_StartIt                                     */
@@ -903,20 +912,19 @@ void InitializeController()
 /* Функция:         Failure                                         */
 /* Описание:        Отключает ИТ и ЗУ через время delay             */
 /* Параметры:       delay -- время задаржки перед отключением, мс   */
+/*                           шаг времени 10 мс                      */
 /********************************************************************/
 void Failure(unsigned int delay)
 {
-    g_FailureCounter++;
+    char StrBuf[STRING_BUF_LEN];
     
-    if(g_FailureCounter >=3)
-    {
-        // Отправить сообщение об ошибке
-        SendMessage(MSG_SYSTEM_ERROR, NULL);
-    }
+    sprintf(StrBuf, "Failure started for %d ms", delay);
+    DebugMessageLn(StrBuf);
 
-    // Выключить ЗУ и ИТ
-    Set_StartZU(FALSE);
-    Set_StartIt(FALSE);
+    g_Timer1 = delay / 10;
+    
+    // Включить процедуру обработки ошибки
+    g_FailureOn = TRUE;
 }
 
 
@@ -1179,7 +1187,6 @@ int main(void)
 
 
 
-
         // -----------------------------------------------------------
         // HANDLE DIAGNOSTIC (Диагностика: непрерывное отображение измеренных параметров) 
         // -----------------------------------------------------------
@@ -1199,7 +1206,35 @@ int main(void)
             USART0_SendStr(strUp);                        
         }
         
-    }
+        
+        // -----------------------------------------------------------
+        // HANDLE FAILURE (Сформировать состояние Ошибки через заданное время)
+        // -----------------------------------------------------------       
+        if(g_FailureOn == TRUE)
+        {
+            if(g_Timer1 == 0)
+            {
+                DebugMessageLn("Finished ");
+                g_FailureCounter++;
+        
+                if(g_FailureCounter >=3)
+                {
+                    // Отправить сообщение об ошибке
+                    SendMessage(MSG_SYSTEM_ERROR, NULL);
+                }
+
+                // Выключить ЗУ и ИТ
+                Set_StartZU(FALSE);
+                Set_StartIt(FALSE);
+            
+                // Завершить процедуру сигнализирования об ошибке
+                g_FailureOn = FALSE;
+            }                
+        }
+        
+                
+        
+    } // while(1)
 }
 
 
@@ -1261,43 +1296,43 @@ ISR(ADC_vect)
         case CHANNEL_UOSN1:
             g_Uosn1 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN1_COEFF;
             sprintf(g_StrBuf, "Uosn1=%d\r\n", g_Uosn1);
-            if(g_Debug_2) USART0_SendStr(g_StrBuf);
+            DebugMessage(g_StrBuf);
         break;
 
         case CHANNEL_UOST1:
             g_Uost1 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST1_COEFF;
             sprintf(g_StrBuf, "Uost1=%d\r\n", g_Uost1);
-            if(g_Debug_2) USART0_SendStr(g_StrBuf);
+            DebugMessage(g_StrBuf);
             break;
 
         case CHANNEL_UOSN2:
             g_Uosn2 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN2_COEFF;
             sprintf(g_StrBuf, "Uosn2=%d\r\n", g_Uosn2);
-            if(g_Debug_2) USART0_SendStr(g_StrBuf);
+            DebugMessage(g_StrBuf);
             break;
 
         case CHANNEL_UOST5:
             g_Uost5 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST5_COEFF;
             sprintf(g_StrBuf, "Uost5=%d\r\n", g_Uost5);
-            if(g_Debug_2) USART0_SendStr(g_StrBuf);
+            DebugMessage(g_StrBuf);
             break;
             
         case CHANNEL_UOST4:
             g_Uost4 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST4_COEFF;
             sprintf(g_StrBuf, "Uost4=%d\r\n", g_Uost4);
-            if(g_Debug_2) USART0_SendStr(g_StrBuf);
+            DebugMessage(g_StrBuf);
             break;
         
         case CHANNEL_UOST3:
             g_Uost3 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST3_COEFF;
             sprintf(g_StrBuf, "Uost3=%d\r\n", g_Uost3);
-            if(g_Debug_2) USART0_SendStr(g_StrBuf);
+            DebugMessage(g_StrBuf);
             break;
         
         case CHANNEL_UOST2:
             g_Uost2 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST2_COEFF;
             sprintf(g_StrBuf, "Uost2=%d\r\n", g_Uost2);
-            if(g_Debug_2) USART0_SendStr(g_StrBuf);
+            DebugMessage(g_StrBuf);
             break;
 
         default:
@@ -1363,7 +1398,7 @@ ISR(USART0_RX_vect)
             g_CmdToExecute[ind] = '\0';
             
             g_CmdSymbolIndex = 0;           // Вернуться на начало строки буфера команды
-            USART0_SendStr("\r\n");         // Перевести строку на ерминале
+            USART0_SendStr("\r\n");         // Перевести строку на терминале
             g_ExecuteCommand = TRUE;        // Выставить флаг на исполнение команды
             break;
 
