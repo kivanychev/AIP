@@ -119,20 +119,20 @@
 #define CHANNEL_UOST2       7
 #define MAX_ADC_CHANNNEL    CHANNEL_UOST2
 
-#define V_REF               5
+#define V_REF               5                               // Опорное напряжение для АЦП
 #define ADC_DIVIDER         100                             // Сотые Доли Вольта
 #define ADC_DIGITS          10                              // Разрядность АЦП
-#define ADC_COEFF           5 * ADC_DIVIDER / ((1 << ADC_DIGITS) - 1)   // Для получения значения в Сотых Долях Вольта
+#define ADC_COEFF           V_REF * ADC_DIVIDER / ((1 << ADC_DIGITS) - 1)   // Для получения значения в Сотых Долях Вольта
 
 // Коэффициенты для измеряемых параметров
-#define U_OSN1_COEFF    1
-#define U_OST1_COEFF    20
-
+#define U_OSN1_COEFF    20
 #define U_OSN2_COEFF    20
-#define U_OST5_COEFF    1
-#define U_OST4_COEFF    1
-#define U_OST3_COEFF    1
+
+#define U_OST1_COEFF    1
 #define U_OST2_COEFF    1
+#define U_OST3_COEFF    1
+#define U_OST4_COEFF    1
+#define U_OST5_COEFF    1
 
 // Коды символов клавиатуры
 #define KEY_ESC         0x1B
@@ -150,6 +150,7 @@
 //=======================================================================================================================
 
 #define StartConvAdc() ADCSRA |= (1<<ADSC)  
+#define DEBUG2(str) if(g_Debug_2) DebugMessage(str)
 
 //=======================================================================================================================
 // LOCAL TYPES
@@ -246,6 +247,8 @@ TCmd g_Commands[] = {
 // Флаги для управления процессами работы
 //-------------------------------------------------
 BOOL g_Debug_1 = TRUE;
+BOOL g_Debug_2 = FALSE;
+
 
 volatile BOOL g_ExecuteCommand = FALSE;             // Флаг выставляется при нажатии Enter для
                                                     // исполнения принятой команды в основном цикле
@@ -767,40 +770,49 @@ void GetBat2()
 /********************************************************/
 /* Функция:         GetUost                             */
 /* Описание:        Called for 'get-uost' command       */
+/*                  Uost1 -- Iзаб                       */
+/*                  Uost2 -- Ik1                        */
+/*                  Uost3 -- Ik2                        */
+/*                  Uost4 -- Ik3                        */
+/*                  Uost5 -- Iюст                       */
 /* Параметры:                                           */
+/*                                                      */
+/* Примечания:                                          */
+/* (g_Uost - 250) означает вычесть 2.5В из значения     */
+/* измеренного апряжения датчика тока                   */
 /********************************************************/
 void GetUost()
 {
     char StrBuf[STRING_BUF_LEN];
     unsigned char hundreds;
-    
-    // Uost1
-    hundreds = g_Uost1 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uost1=%d.%d%d", g_Uost1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+
+    // Uost1 -- Iзаб
+    hundreds = ( (g_Uost1 - 250) * U_OST1_COEFF) % ADC_DIVIDER;
+    sprintf(StrBuf, "@Iзаб=%d.%d%d", g_Uost1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
     strcat(StrBuf, ";\t");
     USART0_SendStr(StrBuf);
 
-    // Uost2
-    hundreds = g_Uost2 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uost2=%d.%d%d", g_Uost2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    // Uost2 -- Ik1 
+    hundreds = ( (g_Uost2 - 250)  * U_OST2_COEFF) % ADC_DIVIDER;
+    sprintf(StrBuf, "@Ik1=%d.%d%d", g_Uost2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
     strcat(StrBuf, ";\t");
     USART0_SendStr(StrBuf);
 
-    // Uost3
-    hundreds = g_Uost3 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uost3=%d.%d%d", g_Uost3 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    // Uost3 -- Ik2  
+    hundreds = ( (g_Uost3 - 250) * U_OST3_COEFF) % ADC_DIVIDER;
+    sprintf(StrBuf, "@Ik2=%d.%d%d", g_Uost3 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
     strcat(StrBuf, ";\t");
     USART0_SendStr(StrBuf);
 
-    // Uost4
-    hundreds = g_Uost4 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uost4=%d.%d%d", g_Uost4 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    // Uost4 -- Ik3
+    hundreds = ( (g_Uost4 - 250)  * U_OST4_COEFF) % ADC_DIVIDER;
+    sprintf(StrBuf, "@Ik3=%d.%d%d", g_Uost4 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
     strcat(StrBuf, ";\t");
     USART0_SendStr(StrBuf);
 
-    // Uost5
-    hundreds = g_Uost5 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uost5=%d.%d%d", g_Uost5 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    // Uost5 -- Iюст
+    hundreds = ( (g_Uost5 - 250) * U_OST5_COEFF) % ADC_DIVIDER;
+    sprintf(StrBuf, "@Iюст=%d.%d%d", g_Uost5 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
     strcat(StrBuf, ";\r\n");
     USART0_SendStr(StrBuf);
 }
@@ -815,15 +827,15 @@ void GetUosn()
     char StrBuf[STRING_BUF_LEN];
     unsigned char hundreds;
     
-    // Uosn1
+    // Uosn1 -- Uаб
     hundreds = g_Uosn1 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uosn1=%d.%d%d", g_Uosn1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    sprintf(StrBuf, "@Uаб=%d.%d%d", g_Uosn1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
     strcat(StrBuf, ";\t");
     USART0_SendStr(StrBuf);
 
-    // Uosn2
+    // Uosn2 -- Uнагр
     hundreds = g_Uosn2 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uosn2=%d.%d%d", g_Uosn2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    sprintf(StrBuf, "@Uнагр=%d.%d%d", g_Uosn2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
     strcat(StrBuf, ";\r\n");
     USART0_SendStr(StrBuf);
 }
@@ -978,24 +990,53 @@ int main(void)
         {
             case 300:
                 DebugMessageLn("3 sec");
+                g_Timer0--;
                 break;
                 
             case 200:
                 DebugMessageLn("2 sec");
+                g_Timer0--;
                 break;
                 
             case 100:
                 DebugMessageLn("1 sec");
+                g_Timer0--;
                 break;
                 
             case 1:
                 DebugMessageLn("0 sec");
+                g_Timer0--;
                 break;
 
             default:                
                 break;
         }
         
+        // -----------------------------------------------------------
+        // HANDLE FAILURE (Сформировать состояние Ошибки через заданное время)
+        // -----------------------------------------------------------       
+        if(g_FailureOn == TRUE)
+        {
+            if(g_Timer1 == 0)
+            {
+                DebugMessageLn("Failure finished ");
+                g_FailureCounter++;
+        
+                if(g_FailureCounter >=3)
+                {
+                    // Отправить сообщение об ошибке
+                    SendMessage(MSG_SYSTEM_ERROR, NULL);
+                }
+
+                // Выключить ЗУ и ИТ
+                Set_StartZU(FALSE);
+                Set_StartIt(FALSE);
+            
+                // Завершить процедуру сигнализирования об ошибке
+                g_FailureOn = FALSE;
+            }                
+        }
+
         
         // -----------------------------------------------------------
         // HANDLE COMMANDS (Обработка команд)
@@ -1205,35 +1246,7 @@ int main(void)
             USART0_SendStr(strUp);
             USART0_SendStr(strUp);                        
         }
-        
-        
-        // -----------------------------------------------------------
-        // HANDLE FAILURE (Сформировать состояние Ошибки через заданное время)
-        // -----------------------------------------------------------       
-        if(g_FailureOn == TRUE)
-        {
-            if(g_Timer1 == 0)
-            {
-                DebugMessageLn("Finished ");
-                g_FailureCounter++;
-        
-                if(g_FailureCounter >=3)
-                {
-                    // Отправить сообщение об ошибке
-                    SendMessage(MSG_SYSTEM_ERROR, NULL);
-                }
-
-                // Выключить ЗУ и ИТ
-                Set_StartZU(FALSE);
-                Set_StartIt(FALSE);
-            
-                // Завершить процедуру сигнализирования об ошибке
-                g_FailureOn = FALSE;
-            }                
-        }
-        
                 
-        
     } // while(1)
 }
 
@@ -1276,10 +1289,12 @@ ISR(TIMER1_COMPA_vect)
 }
 
 
-/*****************************************************/
-/* Функция:     Обработчик прерывания АЦП            */
-/* Описание:    Измеряет значения всех параметров    */
-/*****************************************************/
+/****************************************************/
+/* Функция:     Обработчик прерывания АЦП           */
+/* Описание:    Измеряет значения всех параметров   */
+/*              Измеренное на входе АЦП напряжение  */
+/*              считаем в Сотых Долях Вольта        */
+/****************************************************/
 
 ISR(ADC_vect)
 {
@@ -1295,44 +1310,51 @@ ISR(ADC_vect)
 
         case CHANNEL_UOSN1:
             g_Uosn1 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN1_COEFF;
-            sprintf(g_StrBuf, "Uosn1=%d\r\n", g_Uosn1);
-            DebugMessage(g_StrBuf);
-        break;
 
-        case CHANNEL_UOST1:
-            g_Uost1 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST1_COEFF;
-            sprintf(g_StrBuf, "Uost1=%d\r\n", g_Uost1);
-            DebugMessage(g_StrBuf);
+            sprintf(g_StrBuf, "Uosn1=%d\r\n", g_Uosn1);
+            DEBUG2(g_StrBuf);
             break;
 
         case CHANNEL_UOSN2:
             g_Uosn2 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN2_COEFF;
+
             sprintf(g_StrBuf, "Uosn2=%d\r\n", g_Uosn2);
-            DebugMessage(g_StrBuf);
+            DEBUG2(g_StrBuf);
             break;
 
         case CHANNEL_UOST5:
-            g_Uost5 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST5_COEFF;
+            g_Uost5 = (unsigned int)(adcBuf * ADC_COEFF);
+
             sprintf(g_StrBuf, "Uost5=%d\r\n", g_Uost5);
-            DebugMessage(g_StrBuf);
+            DEBUG2(g_StrBuf);
             break;
             
         case CHANNEL_UOST4:
-            g_Uost4 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST4_COEFF;
+            g_Uost4 = (unsigned int)(adcBuf * ADC_COEFF) ;
+
             sprintf(g_StrBuf, "Uost4=%d\r\n", g_Uost4);
-            DebugMessage(g_StrBuf);
+            DEBUG2(g_StrBuf);
             break;
         
         case CHANNEL_UOST3:
-            g_Uost3 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST3_COEFF;
+            g_Uost3 = (unsigned int)(adcBuf * ADC_COEFF);
+
             sprintf(g_StrBuf, "Uost3=%d\r\n", g_Uost3);
-            DebugMessage(g_StrBuf);
+            DEBUG2(g_StrBuf);
             break;
         
         case CHANNEL_UOST2:
-            g_Uost2 = (unsigned int)(adcBuf * ADC_COEFF) * U_OST2_COEFF;
+            g_Uost2 = (unsigned int)(adcBuf * ADC_COEFF);
+
             sprintf(g_StrBuf, "Uost2=%d\r\n", g_Uost2);
-            DebugMessage(g_StrBuf);
+            DEBUG2(g_StrBuf);
+            break;
+
+        case CHANNEL_UOST1:
+            g_Uost1 = (unsigned int)(adcBuf * ADC_COEFF);
+
+            sprintf(g_StrBuf, "Uost1=%d\r\n", g_Uost1);
+            DEBUG2(g_StrBuf);
             break;
 
         default:
