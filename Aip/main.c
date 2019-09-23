@@ -48,9 +48,9 @@
 
 // Functional pin names for PORTB
 #define PIN_Bat2_05         PB0
-#define PIN_Bat2_06         PB1
-#define PIN_Bat2_07         PB2
-#define PIN_Bat2_08         PB3
+#define PIN_Bat2_06         PG0
+#define PIN_Bat2_07         PG1
+#define PIN_Bat2_08         PG2
 #define PIN_Bat2_09         PB4
 #define PIN_Bat2_10         PB5
 #define PIN_Bat2_11         PB6
@@ -179,6 +179,7 @@ typedef enum {
 
 } TCmdId;
 
+// Сообщения статусов системы
 typedef enum {
     MSG_READY,
     MSG_POWER_SUPPLY_FAILURE,
@@ -189,16 +190,16 @@ typedef enum {
     MSG_LOAD_ERROR
     
 } TMsgId;
-
-
-// 
-
+ 
+// USART states
 typedef enum {
     UART_OK,
     UART_ERROR
 
 } TUartResult;
 
+
+// Command structure
 typedef struct {
     char *CommandName;                              // Имя команды, которое оператор вводит в терминале
     TCmdId CmdId;                                   // ID команды для внутренних задач
@@ -502,7 +503,8 @@ void GPIO_Init()
     PORTA = 0xFF;   // Pull-ups at Battery inputs
     PORTB = 0xFF;   // Pull-ups at Battery inputs
     PORTC = 0xFF;   // Pull-ups at Battery inputs
-    
+    PORTG = 0xFF;   // Pull-ups at Battery inputs
+
     // Set up LEDs as outputs
     tmp = (1 << LED1) | (1 << LED2);
     DDRG = tmp;
@@ -747,8 +749,8 @@ void GetBat2()
     unsigned int bat2 = 0;
     char StrBuf[STRING_BUF_LEN];
 
-    bat2 = (PINC >> 4) | (PINB << 4);
-    
+    bat2 = (PINC >> 4)   |   ((PINB & ((1 << PIN_Bat2_05) | (1 << PIN_Bat2_09)  | (1 << PIN_Bat2_10) | (1 << PIN_Bat2_11) | (1 << PIN_Bat2_12))) << 4)  |  ((PING & ( (1 << PIN_Bat2_06) | (1 << PIN_Bat2_07) | (1 << PIN_Bat2_08) )) << 5);
+
     sprintf(StrBuf, "@BAT2 = ");
     
     for(i = 0; i < SECTIONS_COUNT; ++i)
@@ -960,6 +962,11 @@ int main(void)
 
     unsigned short cmdIndex;
 
+    // -----------------------------------------------------------
+    // INITIALIZE
+    // Настроить работу периферии контроллера. Настройка системы.
+    // -----------------------------------------------------------
+
     GPIO_Init();
     Timer3_Init();
     Timer1_Init();
@@ -983,9 +990,12 @@ int main(void)
         if(g_FailureCounter >= 3)
         {
             // ST_FAILURE
+            // Аварийное состоние системы. 
+            // Требуется устранение проблемы на аппаратном уровне и перезагрузка Контроллера АБ
             continue;
         }
         
+        // Тестовые сообщения при запуске системы
         switch(g_Timer0)
         {
             case 300:
@@ -1013,7 +1023,8 @@ int main(void)
         }
         
         // -----------------------------------------------------------
-        // HANDLE FAILURE (Сформировать состояние Ошибки через заданное время)
+        // HANDLE FAILURE 
+        // Сформировать состояние Ошибки через заданное время
         // -----------------------------------------------------------       
         if(g_FailureOn == TRUE)
         {
