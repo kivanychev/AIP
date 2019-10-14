@@ -338,9 +338,9 @@ volatile int g_FailureCounter = 0;
 // уменьшаться на 1 с интервалом времени тика.
 //-------------------------------------------------
 
-volatile unsigned int g_Timer0 = 0;     // For fun in main()
-volatile unsigned int g_Timer1 = 0;     // For handling Failure
-volatile unsigned int g_Timer2 = 0;
+volatile unsigned int g_TimerMain = 0;     // For fun in main()
+volatile unsigned int g_TimerFailure = 0;     // For handling Failure
+volatile unsigned int g_TimerDiagn = 0; 
 
 
 //=======================================================================================================================
@@ -935,7 +935,7 @@ void Failure(unsigned int delay)
     sprintf(StrBuf, "Failure started for %d ms", delay);
     DebugMessageLn(StrBuf);
 
-    g_Timer1 = delay / 10;
+    g_TimerFailure = delay / 10;
     
     // Включить процедуру обработки ошибки
     g_FailureOn = TRUE;
@@ -981,7 +981,7 @@ int main(void)
     
     sei();
 
-    g_Timer0 = 300; // 3 sec
+    g_TimerMain = 300; // 3 sec
     DebugMessageLn("Start 3 seconds count");
 
     while (1) 
@@ -996,26 +996,26 @@ int main(void)
         }
         
         // Тестовые сообщения при запуске системы
-        switch(g_Timer0)
+        switch(g_TimerMain)
         {
             case 300:
                 DebugMessageLn("3 sec");
-                g_Timer0--;
+                g_TimerMain--;
                 break;
                 
             case 200:
                 DebugMessageLn("2 sec");
-                g_Timer0--;
+                g_TimerMain--;
                 break;
                 
             case 100:
                 DebugMessageLn("1 sec");
-                g_Timer0--;
+                g_TimerMain--;
                 break;
                 
             case 1:
                 DebugMessageLn("0 sec");
-                g_Timer0--;
+                g_TimerMain--;
                 break;
 
             default:                
@@ -1028,7 +1028,7 @@ int main(void)
         // -----------------------------------------------------------       
         if(g_FailureOn == TRUE)
         {
-            if(g_Timer1 == 0)
+            if(g_TimerFailure == 0)
             {
                 DebugMessageLn("Failure finished ");
                 g_FailureCounter++;
@@ -1244,18 +1244,21 @@ int main(void)
         // -----------------------------------------------------------
         if(g_DiagnosticOn == TRUE)
         {
-            // Check if there is FAILURE STATE
-                        
-            // Get all data 
-            GetBat1();
-            GetBat2();
-            GetUosn();
-            GetUost();
+            if(g_TimerDiagn == 0)
+            {
+                g_TimerDiagn = 50;      // Set Timer for 500 ms
+
+                // Get all data 
+                GetBat1();
+                GetBat2();
+                GetUosn();
+                GetUost();
             
-            USART0_SendStr(strUp);
-            USART0_SendStr(strUp);
-            USART0_SendStr(strUp);
-            USART0_SendStr(strUp);                        
+                USART0_SendStr(strUp);
+                USART0_SendStr(strUp);
+                USART0_SendStr(strUp);
+                USART0_SendStr(strUp);
+            }                
         }
                 
     } // while(1)
@@ -1269,8 +1272,8 @@ int main(void)
 /********************************************************************/
 /* Функция:     Обработчик прерывания Timer1 по событию Compare A   */
 /* Описание:    счетчик заданного времени в тиках                   */
-/*              считает время в переменных g_Timer0,  g_Timer1  и   */
-/*              g_Timer2                                            */
+/*              считает время в переменных g_TimerMain,  g_TimerFailure  и   */
+/*              g_TimerDiagn                                            */
 /********************************************************************/
 
 ISR(TIMER1_COMPA_vect)
@@ -1282,19 +1285,19 @@ ISR(TIMER1_COMPA_vect)
         g_led1_flash_cnt = LED1_FLASH_CNT;
     }
 
-    if( g_Timer0 > 0)
+    if( g_TimerMain > 0)
     {
-        g_Timer0 --;
+        g_TimerMain --;
     }
     
-    if( g_Timer1 > 0)
+    if( g_TimerFailure > 0)
     {
-        g_Timer1 --;
+        g_TimerFailure --;
     }
 
-    if( g_Timer2 > 0)
+    if( g_TimerDiagn > 0)
     {
-        g_Timer2 --;
+        g_TimerDiagn --;
     }
 
 }
