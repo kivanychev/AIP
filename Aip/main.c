@@ -125,14 +125,14 @@
 #define ADC_COEFF           V_REF * ADC_DIVIDER / ((1 << ADC_DIGITS) - 1)   // Для получения значения в Сотых Долях Вольта
 
 // Коэффициенты для измеряемых параметров
-#define U_OSN1_COEFF    20
-#define U_OSN2_COEFF    20
+#define U_AB_COEFF      207
+#define U_NAGR_COEFF    207
 
-#define U_OST1_COEFF    1
-#define U_OST2_COEFF    1
-#define U_OST3_COEFF    1
-#define U_OST4_COEFF    1
-#define U_OST5_COEFF    1
+#define I_ZAB_COEFF     210
+#define I_K1_COEFF      210
+#define I_K2_COEFF      210
+#define I_K3_COEFF      210
+#define I_UST_COEFF     210
 
 // Коды символов клавиатуры
 #define KEY_ESC         0x1B
@@ -294,20 +294,22 @@ volatile int  g_Uost4;
 volatile int  g_Uost5;
 
 // Параметры на основе измеренных значений со входов АЦП
-volatile int  g_Uab;        // g_Uosn1 * 20
-volatile int  g_Unagr;      // g_Uosn2 * 20
+volatile int  g_Uab = 0;    // g_Uosn1 * 20
+volatile int  g_Unagr = 0;  // g_Uosn2 * 20
 
-volatile int  g_Uzab;       // g_Uost1 - 2.5V
-volatile int  g_Uk1;        // g_Uost2 - 2.5V
-volatile int  g_Uk2;        // g_Uost3 - 2.5V
-volatile int  g_Uk3;        // g_Uost4 - 2.5V
-volatile int  g_Uust;       // g_Uost5 - 2.5V
+volatile int  g_Uzab = 0;   // g_Uost1 - 2.5V
+volatile int  g_Uk1 = 0;    // g_Uost2 - 2.5V
+volatile int  g_Uk2 = 0;    // g_Uost3 - 2.5V
+volatile int  g_Uk3 = 0;    // g_Uost4 - 2.5V
+volatile int  g_Uust = 0;   // g_Uost5 - 2.5V
 
-volatile int  g_Izab;       // g_Uzab * KT
-volatile int  g_Ik1;        // g_Ik1 * KT
-volatile int  g_Ik2;        // g_Ik2 * KT
-volatile int  g_Ik3;        // g_Ik3 * KT
-volatile int  g_Iust;       // g_Uust * KT
+volatile int  g_Izab = 0;   // g_Uzab * KT
+volatile int  g_Ik1 = 0;    // g_Uk1 * KT
+volatile int  g_Ik2 = 0;    // g_Uk2 * KT
+volatile int  g_Ik3 = 0;    // g_Uk3 * KT
+volatile int  g_Iust = 0;   // g_Uust * KT
+
+volatile int  g_Uzt;	    // Напряжение задания на ток в мВ с шагом 20 мВ
 
 //-------------------------------------------------
 // Состояния батарей
@@ -316,6 +318,8 @@ volatile BOOL g_BatState1[12];
 volatile BOOL g_BatState2[12];
 
 volatile long  g_US8;
+volatile unsigned int g_BatFailedCounter = 0;   // Задержка на включение ошибки по нагрузки при появлении помех
+                                                // на входах батарей
 
 //-------------------------------------------------
 // Состояния и режимы системы
@@ -338,9 +342,11 @@ volatile int g_FailureCounter = 0;
 // уменьшаться на 1 с интервалом времени тика.
 //-------------------------------------------------
 
-volatile unsigned int g_TimerMain = 0;     // For fun in main()
-volatile unsigned int g_TimerFailure = 0;     // For handling Failure
-volatile unsigned int g_TimerDiagn = 0; 
+volatile unsigned int g_TimerMain = 0;      // For fun in main()
+volatile unsigned int g_TimerFailure = 0;   // For handling Failure
+volatile unsigned int g_TimerDiagn = 0;     // Timer for diagnostic
+volatile unsigned int g_TimerIT = 0;
+volatile unsigned int g_TimerZU = 0;
 
 
 //=======================================================================================================================
@@ -680,6 +686,7 @@ BOOL Get_StartZU()
 /***************************************************************************/
 void Set_Uzt(unsigned int value)
 {
+	g_Uzt = value;
     OCR3A = ((value / 100) << 8) / 50;
 }
 
@@ -788,34 +795,40 @@ void GetUost()
     char StrBuf[STRING_BUF_LEN];
     unsigned char hundreds;
 
-    // Uost1 -- Iзаб
-    hundreds = ( (g_Uost1 - 250) * U_OST1_COEFF) % ADC_DIVIDER;
-    sprintf(StrBuf, "@Iзаб=%d.%d%d", g_Uost1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
-    strcat(StrBuf, ";\t");
+    // Iзаб
+    hundreds = g_Izab  % ADC_DIVIDER;
+    sprintf(StrBuf, "@Iзаб=%d.%d%d", g_Izab / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";  \t");
     USART0_SendStr(StrBuf);
 
-    // Uost2 -- Ik1 
-    hundreds = ( (g_Uost2 - 250)  * U_OST2_COEFF) % ADC_DIVIDER;
-    sprintf(StrBuf, "@Ik1=%d.%d%d", g_Uost2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
-    strcat(StrBuf, ";\t");
+    // Ik1 
+    hundreds = g_Ik1 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Ik1=%d.%d%d", g_Ik1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";  \t");
     USART0_SendStr(StrBuf);
 
-    // Uost3 -- Ik2  
-    hundreds = ( (g_Uost3 - 250) * U_OST3_COEFF) % ADC_DIVIDER;
-    sprintf(StrBuf, "@Ik2=%d.%d%d", g_Uost3 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
-    strcat(StrBuf, ";\t");
+    // Ik2  
+    hundreds = g_Ik2 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Ik2=%d.%d%d", g_Ik2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";  \t");
     USART0_SendStr(StrBuf);
 
-    // Uost4 -- Ik3
-    hundreds = ( (g_Uost4 - 250)  * U_OST4_COEFF) % ADC_DIVIDER;
-    sprintf(StrBuf, "@Ik3=%d.%d%d", g_Uost4 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
-    strcat(StrBuf, ";\t");
+    // Ik3
+    hundreds = g_Ik3 % ADC_DIVIDER;
+    sprintf(StrBuf, "@Ik3=%d.%d%d", g_Ik3 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";  \t");
     USART0_SendStr(StrBuf);
 
-    // Uost5 -- Iюст
-    hundreds = ( (g_Uost5 - 250) * U_OST5_COEFF) % ADC_DIVIDER;
-    sprintf(StrBuf, "@Iюст=%d.%d%d", g_Uost5 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
-    strcat(StrBuf, ";\r\n");
+    // Iнагр = Ik1 + Ik2 + Ik3
+    hundreds = ( g_Ik1 + g_Ik2 + g_Ik3 ) % ADC_DIVIDER;
+    sprintf(StrBuf, "@Iнагр=%d.%d%d", ( g_Ik1 + g_Ik2 + g_Ik3 ) / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";  \t");
+    USART0_SendStr(StrBuf);
+
+    // Iюст
+    hundreds = g_Iust % ADC_DIVIDER;
+    sprintf(StrBuf, "@Iюст=%d.%d%d", g_Iust / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";    \r\n");
     USART0_SendStr(StrBuf);
 }
 
@@ -829,16 +842,16 @@ void GetUosn()
     char StrBuf[STRING_BUF_LEN];
     unsigned char hundreds;
     
-    // Uosn1 -- Uаб
-    hundreds = g_Uosn1 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uаб=%d.%d%d", g_Uosn1 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
-    strcat(StrBuf, ";\t");
+    // Uаб
+    hundreds = g_Uab % ADC_DIVIDER;
+    sprintf(StrBuf, "@Uаб=%d.%d%d", g_Uab / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";  \t");
     USART0_SendStr(StrBuf);
 
-    // Uosn2 -- Uнагр
-    hundreds = g_Uosn2 % ADC_DIVIDER;
-    sprintf(StrBuf, "@Uнагр=%d.%d%d", g_Uosn2 / ADC_DIVIDER, hundreds / 10, hundreds % 10);
-    strcat(StrBuf, ";\r\n");
+    // Uнагр
+    hundreds = g_Unagr % ADC_DIVIDER;
+    sprintf(StrBuf, "@Uнагр=%d.%d%d", g_Unagr / ADC_DIVIDER, hundreds / 10, hundreds % 10);
+    strcat(StrBuf, ";   \r\n");
     USART0_SendStr(StrBuf);
 }
 
@@ -1179,17 +1192,27 @@ int main(void)
             {
                 if( (bat1 & (1 << i)) == 0)
                 {
-                    failedSection = i + 1;
-                    sprintf(StrBuf, "1:%d", failedSection);
-                    SendMessage(MSG_BATTERY_FAILURE, StrBuf);
+                    g_BatFailedCounter++;
+                    if(g_BatFailedCounter > 10000)
+                    {
+                        failedSection = i + 1;
+                        sprintf(StrBuf, "1:%d", failedSection);
+                        SendMessage(MSG_BATTERY_FAILURE, StrBuf);
+                    }                        
                 }
 
                 if( (bat2 & (1 << i)) == 0)
                 {
-                    failedSection = i + 1;
-                    sprintf(StrBuf, "2:%d", failedSection);
-                    SendMessage(MSG_BATTERY_FAILURE, StrBuf);
+                    g_BatFailedCounter++;
+                    if(g_BatFailedCounter > 10000)
+                    {
+                        failedSection = i + 1;
+                        sprintf(StrBuf, "2:%d", failedSection);
+                        SendMessage(MSG_BATTERY_FAILURE, StrBuf);
+                    }                        
                 }
+                
+                g_BatFailedCounter = 0;
             }
 
             if(failedSection != 0)
@@ -1204,14 +1227,40 @@ int main(void)
         // -----------------------------------------------------------
         // POWER SUPPLY STATE CONTROL (Контроль ИТ)
         // -----------------------------------------------------------
-
+        if( Get_StartIt() == TRUE)
+        {
+            if( g_Uzab > 450    ||
+                g_Uk1 > 450     ||
+                g_Uk2 > 450     || 
+                g_Uk3 > 450     || 
+                g_Uust > 450)
+              {
+                  
+              }
+        }
 
 
         // -----------------------------------------------------------
         // CHARGER STATE CONTROL (Контроль ЗУ)
         // -----------------------------------------------------------
-
-
+        if( Get_StartZU() == TRUE && Get_StartIt() == TRUE)
+        {
+            // Uab < 80 В
+            // Uzt > 3 В
+            // Uzab < 2.6 В
+            if( (g_Uab < 8000) && (g_Uzt > 300) && (g_Uzab < 260) )
+            {
+/*            SendMessage(MSG_LOAD_ERROR, NULL);
+                sprintf(StrBuf, "Uab = %d; zt = %d; Uzab = %d", g_Uab, g_Uzt, g_Uzab);
+                DebugMessageLn(StrBuf);
+                
+                Failure(0); */
+			}
+            // Uzab > 4.5 В
+			else if(g_Uzab > 450)
+			{
+			}
+        }
 
 
 
@@ -1219,9 +1268,16 @@ int main(void)
         // CHARGER LEVEL CONTROL (Контроль уровня заряда)
         // -----------------------------------------------------------
         // Нужно отслеживать значение 
-
-
-
+        if( Get_StartIt() == TRUE)
+        {
+	        if(g_Uab < 4000 || g_Uab > 6000)
+			{
+				SendMessage(MSG_LOAD_ERROR, NULL);
+                sprintf(StrBuf, "Uab = %d", g_Uab);
+                DebugMessageLn(StrBuf);
+				Failure(0);
+			}
+        }
 
 
         // -----------------------------------------------------------
@@ -1300,6 +1356,16 @@ ISR(TIMER1_COMPA_vect)
         g_TimerDiagn --;
     }
 
+    if( g_TimerIT > 0)
+    {
+        g_TimerIT --;
+    }
+
+    if( g_TimerZU > 0)
+    {
+        g_TimerZU --;
+    }
+
 }
 
 
@@ -1323,21 +1389,25 @@ ISR(ADC_vect)
             break;
 
         case CHANNEL_UOSN1:
-            g_Uosn1 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN1_COEFF;
+            g_Uosn1 = (unsigned int)(adcBuf * ADC_COEFF);
+            g_Uab =  (g_Uosn1 / 10 ) * U_AB_COEFF;
 
             sprintf(g_StrBuf, "Uosn1=%d\r\n", g_Uosn1);
             DEBUG2(g_StrBuf);
             break;
 
         case CHANNEL_UOSN2:
-            g_Uosn2 = (unsigned int)(adcBuf * ADC_COEFF) * U_OSN2_COEFF;
-
+            g_Uosn2 = (unsigned int)(adcBuf * ADC_COEFF);
+            g_Unagr = (g_Uosn2 / 10 ) * U_NAGR_COEFF;
+            
             sprintf(g_StrBuf, "Uosn2=%d\r\n", g_Uosn2);
             DEBUG2(g_StrBuf);
             break;
 
         case CHANNEL_UOST5:
             g_Uost5 = (unsigned int)(adcBuf * ADC_COEFF);
+            g_Uust  = g_Uost5 - 250;                        // -2.5 V
+            g_Iust  = (g_Uust / 10 ) * I_UST_COEFF;
 
             sprintf(g_StrBuf, "Uost5=%d\r\n", g_Uost5);
             DEBUG2(g_StrBuf);
@@ -1345,6 +1415,8 @@ ISR(ADC_vect)
             
         case CHANNEL_UOST4:
             g_Uost4 = (unsigned int)(adcBuf * ADC_COEFF) ;
+            g_Uk3   = g_Uost4 - 250;                        // -2.5 V
+            g_Ik3   = (g_Uk3 / 10 ) * I_K3_COEFF;
 
             sprintf(g_StrBuf, "Uost4=%d\r\n", g_Uost4);
             DEBUG2(g_StrBuf);
@@ -1352,6 +1424,8 @@ ISR(ADC_vect)
         
         case CHANNEL_UOST3:
             g_Uost3 = (unsigned int)(adcBuf * ADC_COEFF);
+            g_Uk2   = g_Uost3 - 250;                        // -2.5 V
+            g_Ik2   = (g_Uk2 / 10 ) * I_K2_COEFF;
 
             sprintf(g_StrBuf, "Uost3=%d\r\n", g_Uost3);
             DEBUG2(g_StrBuf);
@@ -1359,6 +1433,8 @@ ISR(ADC_vect)
         
         case CHANNEL_UOST2:
             g_Uost2 = (unsigned int)(adcBuf * ADC_COEFF);
+            g_Uk1   = g_Uost2 - 250;                        // -2.5 V
+            g_Ik1   = (g_Uk1 / 10 ) * I_K1_COEFF;
 
             sprintf(g_StrBuf, "Uost2=%d\r\n", g_Uost2);
             DEBUG2(g_StrBuf);
@@ -1366,6 +1442,8 @@ ISR(ADC_vect)
 
         case CHANNEL_UOST1:
             g_Uost1 = (unsigned int)(adcBuf * ADC_COEFF);
+            g_Uzab  = g_Uost1 - 250;                        // -2.5 V
+            g_Izab  = (g_Uzab / 10 ) * I_ZAB_COEFF;
 
             sprintf(g_StrBuf, "Uost1=%d\r\n", g_Uost1);
             DEBUG2(g_StrBuf);
