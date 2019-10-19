@@ -128,11 +128,11 @@
 #define U_AB_COEFF      207
 #define U_NAGR_COEFF    207
 
-#define I_ZAB_COEFF     210
-#define I_K1_COEFF      210
-#define I_K2_COEFF      210
-#define I_K3_COEFF      210
-#define I_UST_COEFF     210
+#define I_ZAB_COEFF     81
+#define I_K1_COEFF      209
+#define I_K2_COEFF      209
+#define I_K3_COEFF      209
+#define I_UST_COEFF     66
 
 // Коды символов клавиатуры
 #define KEY_ESC         0x1B
@@ -1193,7 +1193,7 @@ int main(void)
                 if( (bat1 & (1 << i)) == 0)
                 {
                     g_BatFailedCounter++;
-                    if(g_BatFailedCounter > 10000)
+                    if(g_BatFailedCounter > 30000)
                     {
                         failedSection = i + 1;
                         sprintf(StrBuf, "1:%d", failedSection);
@@ -1204,7 +1204,7 @@ int main(void)
                 if( (bat2 & (1 << i)) == 0)
                 {
                     g_BatFailedCounter++;
-                    if(g_BatFailedCounter > 10000)
+                    if(g_BatFailedCounter > 30000)
                     {
                         failedSection = i + 1;
                         sprintf(StrBuf, "2:%d", failedSection);
@@ -1243,22 +1243,27 @@ int main(void)
         // -----------------------------------------------------------
         // CHARGER STATE CONTROL (Контроль ЗУ)
         // -----------------------------------------------------------
-        if( Get_StartZU() == TRUE && Get_StartIt() == TRUE)
+        if( Get_StartZU() == TRUE)
         {
             // Uab < 80 В
             // Uzt > 3 В
             // Uzab < 2.6 В
             if( (g_Uab < 8000) && (g_Uzt > 300) && (g_Uzab < 260) )
             {
-/*            SendMessage(MSG_LOAD_ERROR, NULL);
+                SendMessage(MSG_CHARGER_FAILURE, NULL);
                 sprintf(StrBuf, "Uab = %d; zt = %d; Uzab = %d", g_Uab, g_Uzt, g_Uzab);
                 DebugMessageLn(StrBuf);
                 
-                Failure(0); */
+                Failure(0);
 			}
             // Uzab > 4.5 В
 			else if(g_Uzab > 450)
 			{
+                SendMessage(MSG_CHARGER_FAILURE, NULL);
+                sprintf(StrBuf, "Uab = %d; zt = %d; Uzab = %d", g_Uab, g_Uzt, g_Uzab);
+                DebugMessageLn(StrBuf);
+                
+                Failure(0);
 			}
         }
 
@@ -1270,7 +1275,7 @@ int main(void)
         // Нужно отслеживать значение 
         if( Get_StartIt() == TRUE)
         {
-	        if(g_Uab < 4000 || g_Uab > 6000)
+	        if(g_Unagr < 4000 || g_Unagr > 6000)
 			{
 				SendMessage(MSG_LOAD_ERROR, NULL);
                 sprintf(StrBuf, "Uab = %d", g_Uab);
@@ -1338,6 +1343,7 @@ ISR(TIMER1_COMPA_vect)
     if(g_led1_flash_cnt == 0)
     {
         Toggle_LED2();
+        Toggle_LED1();
         g_led1_flash_cnt = LED1_FLASH_CNT;
     }
 
